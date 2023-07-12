@@ -535,6 +535,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "dj-wizard"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "colored",
+ "colorize",
+ "dialoguer",
+ "error-stack",
+ "futures-util",
+ "headless_chrome",
+ "indicatif",
+ "lazy-regex",
+ "native-dialog",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1861,28 +1883,6 @@ dependencies = [
  "byteorder",
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "soundeo-bot"
-version = "0.1.10"
-dependencies = [
- "clap",
- "colored",
- "colorize",
- "dialoguer",
- "error-stack",
- "futures-util",
- "headless_chrome",
- "indicatif",
- "lazy-regex",
- "native-dialog",
- "reqwest",
- "scraper",
- "serde",
- "serde_json",
- "tokio",
- "url",
 ]
 
 [[package]]

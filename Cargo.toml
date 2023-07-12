@@ -1,8 +1,8 @@
 [package]
-name = "soundeo-bot"
-version = "0.1.10"
+name = "dj-wizard"
+version = "0.1.0"
 edition = "2021"
-description = "CLI to download all the songs from a Soundeo page"
+description = "CLI for DJs"
 license = "MIT OR Apache-2.0"
 documentation = "https://www.github.com/matiasbn/soundeo-bot"
 homepage = "https://www.github.com/matiasbn/soundeo-bot"
