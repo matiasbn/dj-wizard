@@ -1,4 +1,4 @@
-# Soundeo bot
+# DJ wizard
 
 Automatically download all the songs from a Soundeo.com url to the given path.
 
@@ -9,7 +9,7 @@ It also stores a record of the already downloaded files.
 Run:
 
 ```
-soundeo-bot login
+dj-wizard login
 ```
 
 Fill the necessary data and select the folder to download the tracks. 
@@ -27,7 +27,7 @@ The `config.json` file is stored at `$HOME/.soundeo_bot_config`:
 Run the next command for more info:
 
 ```shell
-soundeo-bot --help
+dj-wizard --help
 ```
 
 You can download songs from any valid soundeo.com page. The program is not validating the correct link so be careful.
@@ -37,7 +37,7 @@ You can download songs from any valid soundeo.com page. The program is not valid
 You can queue multiple songs, and then download them by running
 
 ```shell
-soundeo-bot queue
+dj-wizard queue
 ```
 
 Select _Add to queue_ to queue them, and then select _Resume queue_ to download them. 
@@ -47,7 +47,7 @@ Select _Add to queue_ to queue them, and then select _Resume queue_ to download 
 You can start downloading directly from a url by running
 
 ```shell
-soundeo-bot url
+dj-wizard url
 ```
 
 ## Hint
