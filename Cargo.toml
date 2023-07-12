@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI for DJs"
 license = "MIT OR Apache-2.0"
-documentation = "https://www.github.com/matiasbn/soundeo-bot"
-homepage = "https://www.github.com/matiasbn/soundeo-bot"
-repository = "https://www.github.com/matiasbn/soundeo-bot"
+documentation = "https://www.github.com/matiasbn/dj-wizard"
+homepage = "https://www.github.com/matiasbn/dj-wizard"
+repository = "https://www.github.com/matiasbn/dj-wizard"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
