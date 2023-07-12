@@ -1,0 +1,29 @@
+[package]
+name = "soundeo-bot"
+version = "0.1.10"
+edition = "2021"
+description = "CLI to download all the songs from a Soundeo page"
+license = "MIT OR Apache-2.0"
+documentation = "https://www.github.com/matiasbn/soundeo-bot"
+homepage = "https://www.github.com/matiasbn/soundeo-bot"
+repository = "https://www.github.com/matiasbn/soundeo-bot"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.3.10", features = ["derive"] }
+lazy-regex = "2.5.0"
+reqwest = { version = "0.11.18", features = ["stream"] }
+scraper = "0.17.1"
+serde_json = "1.0.99"
+futures-util = "0.3.14"
+tokio = { version = "1.13.0", features = ["full"] }
+url = "2.4.0"
+error-stack = "0.3.1"
+colorize = "0.1.0"
+serde = { version = "1.0.153", features = ["derive"] }
+indicatif = "0.17.5"
+headless_chrome = "1.0.5"
+dialoguer = "0.10.4"
+colored = "2.0.0"
+native-dialog = "0.6.4"

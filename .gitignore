@@ -1,0 +1,5 @@
+/target
+.env
+/curl_log.json
+config.json
+.idea
