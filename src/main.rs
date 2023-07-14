@@ -21,6 +21,7 @@ use crate::user::{SoundeoUser, SoundeoUserConfig};
 mod cleaner;
 mod dialoguer;
 mod errors;
+mod soundeo;
 mod soundeo_log;
 mod track;
 mod user;
