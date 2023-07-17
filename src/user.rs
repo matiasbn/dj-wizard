@@ -1,3 +1,4 @@
+use crate::utils::retrieve_html;
 use crate::{SoundeoBotCommands, Suggestion};
 use colored::Colorize;
 use colorize::AnsiColor;
@@ -6,13 +7,14 @@ use headless_chrome::protocol::cdp::Runtime::ConsoleAPICalledEventTypeOption::Di
 use headless_chrome::Browser;
 use lazy_regex::regex;
 use reqwest::{Client, Response};
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt::Write;
 use std::path::Path;
 use std::{env, fmt, fs, string};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SoundeoUserError;
 impl fmt::Display for SoundeoUserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -92,7 +94,7 @@ impl SoundeoUserConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SoundeoUser {
     pub name: String,
     pub pass: String,
@@ -104,6 +106,7 @@ pub struct SoundeoUser {
     pub bruid: String,
     pub snd_data: String,
     pub remaining_downloads: String,
+    pub remaining_downloads_bonus: String,
     pub remaining_time_to_reset: String,
 }
 
@@ -121,13 +124,16 @@ impl SoundeoUser {
             pk_ses: "".to_string(),
             bruid: "".to_string(),
             snd_data: "".to_string(),
-            remaining_downloads: "".to_string(),
+            remaining_downloads: "0".to_string(),
+            remaining_downloads_bonus: "0".to_string(),
             remaining_time_to_reset: "".to_string(),
         })
     }
 
     pub fn validate_remaining_downloads(&mut self) -> SoundeoUserResult<()> {
-        if self.remaining_downloads == "0".to_string() {
+        if self.remaining_downloads == "0".to_string()
+            && self.remaining_downloads_bonus == "0".to_string()
+        {
             return Err(Report::new(SoundeoUserError)
                 .attach_printable("No more downloads available")
                 .attach(Suggestion(format!(
@@ -252,36 +258,55 @@ impl SoundeoUser {
 
     fn parse_remaining_downloads_and_wait_time(&mut self, header: String) -> SoundeoUserResult<()> {
         // Example
-        // <span id='span-downloads'><span class=\"\" title=\"Main (will be reset in 2 hours 42 minutes 10 seconds)\">0</span></span>
+        // <span id='span-downloads'><span class=\"\" title=\"Main (will be reset in 2 hours 42 minutes 10 seconds)\">150</span></span>
         let header_downloads_regex = regex!(
-            r#"(<span id='span-downloads'><span class=\\"\\" title=\\")+[\w\(\) ]+(\\">)[0-9]+(<\/span><\/span>)"#
+            r#"<span id='span-downloads'>(.*?)<\/span>(?:\s*(?:\+\s*)?<span[^>]*>(.*?)<\/span>)?(<\/span>)?"#
         );
+
         let downloads_header = header_downloads_regex
             .find(&header)
             .ok_or(SoundeoUserError)
             .into_report()?
             .as_str()
             .to_string();
+
+        // if downloads_header.contains("")
+
         let mut downloads_header_split = downloads_header
             .trim_start_matches(
-                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in "#,
+                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in ",
             )
-            .trim_end_matches(r#"</span></span>"#)
+            .trim_end_matches(r#"</span></span>"#,
+            )
             .split(r#")\">"#);
         let remaining_time = downloads_header_split
             .next()
             .ok_or(SoundeoUserError)
             .into_report()?
             .to_string();
-        let remaining_downloads = downloads_header_split
-            .next()
-            .ok_or(SoundeoUserError)
-            .into_report()?
-            .to_string();
+        let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
 
-        self.remaining_downloads = remaining_downloads;
+        self.remaining_downloads = remaining_downloads_vec[0].clone();
+        self.remaining_downloads_bonus = if remaining_downloads_vec.len() == 2 {
+            remaining_downloads_vec[1].clone()
+        } else {
+            "0".to_string()
+        };
         self.remaining_time_to_reset = remaining_time;
         Ok(())
+    }
+
+    fn get_remaining_downloads(&self, header: String) -> SoundeoUserResult<Vec<String>> {
+        let document = Html::parse_document(&header);
+
+        let selector = Selector::parse("#span-downloads span").unwrap();
+
+        let numbers: Vec<String> = document
+            .select(&selector)
+            .map(|element| element.inner_html().as_str().to_string())
+            .collect();
+
+        Ok(numbers)
     }
 
     pub fn get_session_cookie(&self) -> SoundeoUserResult<String> {
@@ -292,5 +317,45 @@ impl SoundeoUser {
             "{}; {}; {}; {}; {}",
             self.pk_id, self.pk_ses, self.snd, self.snd_data, self.bruid
         ))
+    }
+}
+
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_get_value_with_bonus() {
+        let html = r#"<li id="top-menu-downloads"><a href="/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="active" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus (can be used on any day with premium account)">300</span></span></a></li>"#;
+
+        let document = Html::parse_document(html);
+
+        let selector = Selector::parse("#span-downloads span").unwrap();
+
+        let numbers: Vec<String> = document
+            .select(&selector)
+            .map(|element| element.inner_html().as_str().to_string())
+            .collect();
+
+        for number in numbers {
+            println!("Number: {}", number);
+        }
+    }
+
+    #[test]
+    fn test_get_value_without_bonus() {
+        let html = r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in 2 hours 42 minutes 10 seconds)\">150</span></span>"#;
+
+        let document = Html::parse_document(html);
+
+        let selector = Selector::parse("#span-downloads span").unwrap();
+
+        let numbers: Vec<String> = document
+            .select(&selector)
+            .map(|element| element.inner_html().as_str().to_string())
+            .collect();
+
+        for number in numbers {
+            println!("Number: {}", number);
+        }
     }
 }
