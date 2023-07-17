@@ -1,4 +1,3 @@
-use crate::utils::retrieve_html;
 use crate::{SoundeoBotCommands, Suggestion};
 use colored::Colorize;
 use colorize::AnsiColor;

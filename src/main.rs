@@ -24,7 +24,6 @@ mod errors;
 mod soundeo_log;
 mod track;
 mod user;
-mod utils;
 
 #[derive(Debug)]
 pub struct SoundeoBotError;
