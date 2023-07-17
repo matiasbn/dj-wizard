@@ -140,10 +140,18 @@ impl SoundeoTrack {
         soundeo_user: &mut SoundeoUser,
     ) -> SoundeoTrackResult<()> {
         self.get_download_url(soundeo_user).await?;
-        println!(
-            "{} tracks before reaching the download limit",
-            soundeo_user.remaining_downloads.clone().cyan()
-        );
+        if soundeo_user.remaining_downloads_bonus == "0".to_string() {
+            println!(
+                "{} tracks before reaching the download limit",
+                soundeo_user.remaining_downloads.clone().cyan()
+            );
+        } else {
+            println!(
+                "{} (plus {} bonus) tracks before reaching the download limit",
+                soundeo_user.remaining_downloads.clone().cyan(),
+                soundeo_user.remaining_downloads_bonus.clone().cyan(),
+            );
+        }
         let pb = ProgressBar::new(self.total_size);
         pb.set_style(ProgressStyle::default_bar()
             .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.white/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})").into_report().change_context(SoundeoTrackError)?
@@ -178,7 +186,7 @@ impl SoundeoTrack {
             pb.set_position(new);
         }
         self.downloaded = true;
-        let message = format!("{} succesfully downloaded", self.file_name.clone().green(),);
+        let message = format!("{} successfully downloaded", self.file_name.clone().green(),);
         pb.finish_with_message(message);
         Ok(())
     }
