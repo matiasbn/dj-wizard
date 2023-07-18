@@ -17,6 +17,7 @@ pub type SoundeoAPIResult<T> = error_stack::Result<T, SoundeoAPIError>;
 pub enum SoundeoAPI {
     GetTrackInfo { track_id: String },
     GetTrackDownloadUrl { track_id: String },
+    GetSearchBarResult { term: String },
 }
 
 impl SoundeoAPI {
@@ -29,6 +30,11 @@ impl SoundeoAPI {
             }
             SoundeoAPI::GetTrackDownloadUrl { track_id } => {
                 let url = format!("https://soundeo.com/download/{}/3", track_id);
+                let response = self.api_get(url, soundeo_user).await?;
+                Ok(response)
+            }
+            SoundeoAPI::GetSearchBarResult { term } => {
+                let url = format!("https://soundeo.com/catalog/ajAutocomplete?term={}", term);
                 let response = self.api_get(url, soundeo_user).await?;
                 Ok(response)
             }

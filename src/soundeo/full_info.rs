@@ -1,5 +1,5 @@
 use crate::soundeo::api::SoundeoAPI;
-use crate::soundeo::track::{SoundeoTrackError, SoundeoTrackResult};
+use crate::soundeo::{SoundeoError, SoundeoResult};
 use crate::user::SoundeoUser;
 use error_stack::{FutureExt, IntoReport, ResultExt};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -56,20 +56,20 @@ impl SoundeoTrackFullInfo {
             size: "".to_string(),
         }
     }
-    pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoTrackResult<()> {
+    pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoResult<()> {
         let api_response = SoundeoAPI::GetTrackInfo {
             track_id: self.id.clone(),
         }
         .get(soundeo_user)
         .await
-        .change_context(SoundeoTrackError)?;
+        .change_context(SoundeoError)?;
         let json: Value = serde_json::from_str(&api_response)
             .into_report()
-            .change_context(SoundeoTrackError)?;
+            .change_context(SoundeoError)?;
         let track = json["track"].clone();
         let full_info: Self = serde_json::from_value(track)
             .into_report()
-            .change_context(SoundeoTrackError)?;
+            .change_context(SoundeoError)?;
         self.clone_from(&full_info);
         Ok(())
     }
@@ -88,5 +88,12 @@ mod tests {
         soundeo_user.login_and_update_user_info().await.unwrap();
         soundeo_full_info.get_info(&soundeo_user).await.unwrap();
         println!("{:#?}", soundeo_full_info);
+    }
+
+    #[tokio::test]
+    async fn test_get_info_from_name() {
+        let track_id = "Falling (Club Mix)".to_string();
+        let mut soundeo_user = SoundeoUser::new().unwrap();
+        soundeo_user.login_and_update_user_info().await.unwrap();
     }
 }
