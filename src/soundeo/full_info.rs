@@ -89,11 +89,4 @@ mod tests {
         soundeo_full_info.get_info(&soundeo_user).await.unwrap();
         println!("{:#?}", soundeo_full_info);
     }
-
-    #[tokio::test]
-    async fn test_get_info_from_name() {
-        let track_id = "Falling (Club Mix)".to_string();
-        let mut soundeo_user = SoundeoUser::new().unwrap();
-        soundeo_user.login_and_update_user_info().await.unwrap();
-    }
 }

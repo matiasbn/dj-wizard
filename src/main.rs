@@ -23,6 +23,7 @@ mod dialoguer;
 mod errors;
 mod soundeo;
 mod soundeo_log;
+mod spotify;
 mod user;
 
 #[derive(Debug)]
