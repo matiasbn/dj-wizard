@@ -16,13 +16,19 @@ pub type SoundeoAPIResult<T> = error_stack::Result<T, SoundeoAPIError>;
 
 pub enum SoundeoAPI {
     GetTrackInfo { track_id: String },
+    GetTrackDownloadUrl { track_id: String },
 }
 
 impl SoundeoAPI {
-    pub async fn call(&self, soundeo_user: &SoundeoUser) -> SoundeoAPIResult<String> {
+    pub async fn get(&self, soundeo_user: &SoundeoUser) -> SoundeoAPIResult<String> {
         return match self {
             SoundeoAPI::GetTrackInfo { track_id } => {
                 let url = format!("https://www.soundeo.com/tracks/status/{}", track_id);
+                let response = self.api_get(url, soundeo_user).await?;
+                Ok(response)
+            }
+            SoundeoAPI::GetTrackDownloadUrl { track_id } => {
+                let url = format!("https://soundeo.com/download/{}/3", track_id);
                 let response = self.api_get(url, soundeo_user).await?;
                 Ok(response)
             }
@@ -60,5 +66,3 @@ impl SoundeoAPI {
         Ok(response_text)
     }
 }
-
-mod api {}

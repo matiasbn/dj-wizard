@@ -60,7 +60,7 @@ impl SoundeoTrackFullInfo {
         let api_response = SoundeoAPI::GetTrackInfo {
             track_id: self.id.clone(),
         }
-        .call(soundeo_user)
+        .get(soundeo_user)
         .await
         .change_context(SoundeoTrackError)?;
         let json: Value = serde_json::from_str(&api_response)
@@ -82,7 +82,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_info() {
-        let track_id = "17184136".to_string();
+        let track_id = "15573345".to_string();
         let mut soundeo_full_info = SoundeoTrackFullInfo::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();

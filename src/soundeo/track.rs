@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::HashSet;
 
+use crate::soundeo::api::SoundeoAPI;
 use crate::Suggestion;
 use colored::Colorize;
 use colorize::AnsiColor;
@@ -81,40 +82,12 @@ impl SoundeoTrack {
     }
 
     async fn get_download_url(&mut self, soundeo_user: &mut SoundeoUser) -> SoundeoTrackResult<()> {
-        let client = Client::new();
-        let url = format!("https://soundeo.com/download/{}/3", self.track_id);
-        let cookie = format!(
-            "{}; {}; {}; {}; {}",
-            soundeo_user.pk_id,
-            soundeo_user.pk_ses,
-            soundeo_user.snd,
-            soundeo_user.snd_data,
-            soundeo_user.bruid
-        );
-        let response = client
-            .get(url)
-            .header("authority", "soundeo.com")
-            .header("accept", "application/json, text/javascript, */*; q=0.01")
-            .header("accept-language", "en-US,en;q=0.9")
-            .header("content-type", "application/x-www-form-urlencoded; charset=UTF-8")
-            .header("cookie", cookie)
-            .header("referer", "https://soundeo.com/track/peggy-gou-it-goes-like-nanana-original-mix-17184136.html")
-            .header("sec-ch-ua", r#"Not.A/Brand";v="8", "Chromium";v="114", "Brave";v="114"#)
-            .header("sec-ch-ua-mobile", "?0")
-            .header("sec-ch-ua-platform", "macOS")
-            .header("sec-fetch-dest", "empty")
-            .header("sec-fetch-mode", "cors")
-            .header("sec-fetch-site", "same-origin")
-            .header("sec-gpc", "1")
-            .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-            .header("x-requested-with", "XMLHttpRequest")
-            .send()
-            .await.into_report().change_context(SoundeoTrackError)?;
-        let response_text = response
-            .text()
-            .await
-            .into_report()
-            .change_context(SoundeoTrackError)?;
+        let response_text = SoundeoAPI::GetTrackDownloadUrl {
+            track_id: self.track_id.clone(),
+        }
+        .get(soundeo_user)
+        .await
+        .change_context(SoundeoTrackError)?;
         let json_resp: Value = serde_json::from_str(&response_text)
             .into_report()
             .change_context(SoundeoTrackError)?;
