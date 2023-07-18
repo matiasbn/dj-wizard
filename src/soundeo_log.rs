@@ -4,10 +4,10 @@ use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::soundeo::track::SoundeoTrack;
 use error_stack::{IntoReport, ResultExt};
 use serde::{Deserialize, Serialize};
 
-use crate::track::SoundeoTrack;
 use crate::user::SoundeoUser;
 
 #[derive(Debug)]

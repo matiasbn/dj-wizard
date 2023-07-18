@@ -13,9 +13,9 @@ use serde_json::json;
 use url::{Host, Position, Url};
 
 use crate::dialoguer::Dialoguer;
+use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo::track::{SoundeoTrack, SoundeoTracksList};
 use crate::soundeo_log::SoundeoBotLog;
-use crate::track::full_info::FullTrackInfo;
-use crate::track::{SoundeoTrack, SoundeoTracksList};
 use crate::user::{SoundeoUser, SoundeoUserConfig};
 
 mod cleaner;
@@ -23,7 +23,6 @@ mod dialoguer;
 mod errors;
 mod soundeo;
 mod soundeo_log;
-mod track;
 mod user;
 
 #[derive(Debug)]
@@ -285,9 +284,9 @@ impl SoundeoBotCommands {
                     .login_and_update_user_info()
                     .await
                     .change_context(SoundeoBotError)?;
-                let mut soundeo_track_full_info = FullTrackInfo::new(track_id);
+                let mut soundeo_track_full_info = SoundeoTrackFullInfo::new(track_id);
                 soundeo_track_full_info
-                    .get_track_info(&soundeo_user)
+                    .get_info(&soundeo_user)
                     .await
                     .change_context(SoundeoBotError)?;
                 println!("{:#?}", soundeo_track_full_info);
