@@ -16,8 +16,8 @@ use crate::dialoguer::Dialoguer;
 use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::track::{SoundeoTrack, SoundeoTracksList};
 use crate::soundeo_log::DjWizardLog;
+use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::spotify::SpotifyCommands;
 use crate::user::{SoundeoUser, SoundeoUserConfig};
 
 mod cleaner;

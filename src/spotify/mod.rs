@@ -13,6 +13,7 @@ use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::SoundeoUser;
 
 pub mod api;
+pub mod commands;
 pub mod playlist;
 pub mod track;
 
@@ -40,69 +41,14 @@ impl Spotify {
             playlists: HashMap::new(),
         }
     }
-}
-#[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
-pub enum SpotifyCommands {
-    AddNewPlaylist,
-    UpdatePlaylist,
-    DownloadTracksFromPlaylist,
-}
 
-impl SpotifyCommands {
-    pub async fn execute() -> SpotifyResult<()> {
-        let options = Self::get_options();
-        let selection =
-            Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
-        return match Self::get_selection(selection) {
-            SpotifyCommands::AddNewPlaylist => Self::add_new_playlist().await,
-            SpotifyCommands::UpdatePlaylist => {
-                unimplemented!()
-            }
-            SpotifyCommands::DownloadTracksFromPlaylist => {
-                unimplemented!()
-            }
-        };
-    }
-
-    fn get_options() -> Vec<String> {
-        Self::iter()
-            .map(|element| element.to_string().to_sentence_case())
-            .collect::<Vec<_>>()
-    }
-
-    fn get_selection(selection: usize) -> Self {
-        match selection {
-            0 => Self::AddNewPlaylist,
-            _ => unimplemented!(),
-        }
-    }
-
-    async fn add_new_playlist() -> SpotifyResult<()> {
-        let prompt_text = format!("Spotify playlist url: ");
-        let url = Dialoguer::input(prompt_text).change_context(SpotifyError)?;
-        let playlist_url = Url::parse(&url)
-            .into_report()
-            .change_context(SpotifyError)?;
-
-        let mut playlist =
-            SpotifyPlaylist::new(playlist_url.to_string()).change_context(SpotifyError)?;
-        playlist
-            .get_playlist_info()
-            .await
-            .change_context(SpotifyError)?;
-        let mut dj_wizard_log = DjWizardLog::read_log().change_context(SpotifyError)?;
-        dj_wizard_log
-            .spotify
+    pub fn get_playlist_by_name(&self, name: String) -> SpotifyResult<SpotifyPlaylist> {
+        let playlist = self
             .playlists
-            .insert(playlist.spotify_playlist_id.clone(), playlist.clone());
-        let soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
-        dj_wizard_log
-            .save_log(&soundeo_user)
-            .change_context(SpotifyError)?;
-        println!(
-            "Playlist {} successfully stored",
-            playlist.name.clone().green()
-        );
-        Ok(())
+            .values()
+            .find(|playlist| playlist.name == name)
+            .ok_or(SpotifyError)
+            .into_report()?;
+        Ok(playlist.clone())
     }
 }

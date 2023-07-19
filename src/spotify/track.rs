@@ -1,3 +1,4 @@
+use crate::spotify::SpotifyResult;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -16,5 +17,9 @@ impl SpotifyTrack {
             spotify_track_id,
             soundeo_track_id: None,
         }
+    }
+
+    pub async fn get_soundeo_track_id(&mut self) -> SpotifyResult<()> {
+        Ok(())
     }
 }

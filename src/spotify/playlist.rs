@@ -118,8 +118,6 @@ impl SpotifyPlaylist {
                 artists.clone().cyan()
             );
         }
-        
-        
         Ok(())
     }
 }
