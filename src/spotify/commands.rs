@@ -106,8 +106,8 @@ impl SpotifyCommands {
                     log.save_log(&soundeo_user).change_context(SpotifyError)?;
                     soundeo_track_id.clone()
                 };
-            if !soundeo_track_id.is_empty() {
-                soundeo_ids.push(soundeo_track_id);
+            if soundeo_track_id.is_some() {
+                soundeo_ids.push(soundeo_track_id.clone().unwrap());
             }
         }
         for soundeo_track_id in soundeo_ids {

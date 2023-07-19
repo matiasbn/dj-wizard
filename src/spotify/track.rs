@@ -24,7 +24,10 @@ impl SpotifyTrack {
         }
     }
 
-    pub async fn get_soundeo_track_id(&self, soundeo_user: &SoundeoUser) -> SpotifyResult<String> {
+    pub async fn get_soundeo_track_id(
+        &self,
+        soundeo_user: &SoundeoUser,
+    ) -> SpotifyResult<Option<String>> {
         let term = self.get_track_search_term();
         let results = SoundeoSearchBar::Tracks
             .search_term(term, &soundeo_user)
@@ -32,11 +35,12 @@ impl SpotifyTrack {
             .change_context(SpotifyError)?;
         if results.is_empty() {
             println!(
-                "Tracks not found for song {} by {}",
+                "Tracks not found for song {} by {}: {}",
                 self.title.clone().red(),
-                self.artists.clone().red()
+                self.artists.clone().red(),
+                self.get_track_url()
             );
-            return Ok("".to_string());
+            return Ok(None);
         }
         let mut titles = vec![];
         for result in results.clone() {
@@ -57,7 +61,7 @@ impl SpotifyTrack {
                 self.artists.clone().red(),
                 self.get_track_url()
             );
-            return Ok("".to_string());
+            return Ok(None);
         }
 
         titles.push("Skip this track".purple().to_string());
@@ -73,10 +77,10 @@ impl SpotifyTrack {
             Dialoguer::select(prompt_text, titles.clone(), None).change_context(SpotifyError)?;
 
         if selection == titles.len() - 1 {
-            return Ok("".to_string());
+            return Ok(None);
         }
         let search_result = results[selection].clone();
-        Ok(search_result.value)
+        Ok(Some(search_result.value))
     }
 
     pub fn get_track_search_term(&self) -> String {
