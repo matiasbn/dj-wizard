@@ -17,6 +17,7 @@ use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::track::{SoundeoTrack, SoundeoTracksList};
 use crate::soundeo_log::DjWizardLog;
 use crate::spotify::playlist::SpotifyPlaylist;
+use crate::spotify::SpotifyCommands;
 use crate::user::{SoundeoUser, SoundeoUserConfig};
 
 mod cleaner;
@@ -42,12 +43,12 @@ pub type DjWizardResult<T> = error_stack::Result<T, DjWizardError>;
 #[command(author, version, about = "Dj Wizard bot")]
 struct Cli {
     #[command(subcommand)]
-    command: SoundeoBotCommands,
+    command: DjWizardCommands,
 }
 
 /// A simple program to download all files from a search in soundeo
 #[derive(Subcommand, Debug, PartialEq, Clone)]
-enum SoundeoBotCommands {
+enum DjWizardCommands {
     /// Stores the Soundeo credentials
     Login,
     /// Reads the current config file
@@ -66,10 +67,10 @@ enum SoundeoBotCommands {
     Spotify,
 }
 
-impl SoundeoBotCommands {
+impl DjWizardCommands {
     pub async fn execute(&self) -> DjWizardResult<()> {
         return match self {
-            SoundeoBotCommands::Login => {
+            DjWizardCommands::Login => {
                 let mut soundeo_user_config = SoundeoUserConfig::new();
                 let prompt_text = format!("Soundeo user: ");
                 soundeo_user_config.user =
@@ -101,7 +102,7 @@ impl SoundeoBotCommands {
                     .change_context(DjWizardError)?;
                 Ok(())
             }
-            SoundeoBotCommands::Config => {
+            DjWizardCommands::Config => {
                 let mut soundeo_bot_config = SoundeoUserConfig::new();
                 soundeo_bot_config
                     .read_config_file()
@@ -109,7 +110,7 @@ impl SoundeoBotCommands {
                 println!("Current config:\n{:#?}", soundeo_bot_config);
                 Ok(())
             }
-            SoundeoBotCommands::Queue => {
+            DjWizardCommands::Queue => {
                 let options = vec!["Add to queue", "Resume queue"];
                 let prompt_text = "What you want to do?".to_string();
                 let selection =
@@ -212,7 +213,7 @@ impl SoundeoBotCommands {
                 }
                 Ok(())
             }
-            SoundeoBotCommands::Url => {
+            DjWizardCommands::Url => {
                 let prompt_text = format!("Soundeo url: ");
                 let url = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
                 let soundeo_url = Url::parse(&url)
@@ -262,7 +263,7 @@ impl SoundeoBotCommands {
                 }
                 Ok(())
             }
-            SoundeoBotCommands::Clean => {
+            DjWizardCommands::Clean => {
                 let soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
                 println!("Select the folder to start cleaning repeated files");
                 let selected_path = FileDialog::new()
@@ -278,7 +279,7 @@ impl SoundeoBotCommands {
                 );
                 clean_repeated_files(selected_path).change_context(DjWizardError)
             }
-            SoundeoBotCommands::Info => {
+            DjWizardCommands::Info => {
                 let prompt_text = "Soundeo track id: ".to_string();
                 let track_id = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
                 let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
@@ -294,58 +295,35 @@ impl SoundeoBotCommands {
                 println!("{:#?}", soundeo_track_full_info);
                 Ok(())
             }
-            SoundeoBotCommands::Spotify => {
-                let prompt_text = format!("Spotify playlist url: ");
-                let url = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
-                let playlist_url = Url::parse(&url)
-                    .into_report()
-                    .change_context(DjWizardError)?;
-
-                let mut playlist =
-                    SpotifyPlaylist::new(playlist_url.to_string()).change_context(DjWizardError)?;
-                playlist
-                    .get_playlist_info()
+            DjWizardCommands::Spotify => {
+                SpotifyCommands::execute()
+                    .change_context(DjWizardError)
                     .await
-                    .change_context(DjWizardError)?;
-                let mut dj_wizard_log = DjWizardLog::read_log().change_context(DjWizardError)?;
-                dj_wizard_log
-                    .spotify
-                    .playlists
-                    .insert(playlist.spotify_playlist_id.clone(), playlist.clone());
-                let soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
-                dj_wizard_log
-                    .save_log(&soundeo_user)
-                    .change_context(DjWizardError)?;
-                println!(
-                    "Playlist {} successfully stored",
-                    playlist.name.clone().green()
-                );
-                Ok(())
             }
         };
     }
 
     pub fn cli_command(&self) -> String {
         match self {
-            SoundeoBotCommands::Login => {
+            DjWizardCommands::Login => {
                 format!("dj-wizard login")
             }
-            SoundeoBotCommands::Config => {
+            DjWizardCommands::Config => {
                 format!("dj-wizard config")
             }
-            SoundeoBotCommands::Queue => {
+            DjWizardCommands::Queue => {
                 format!("dj-wizard queue")
             }
-            SoundeoBotCommands::Url => {
+            DjWizardCommands::Url => {
                 format!("dj-wizard url")
             }
-            SoundeoBotCommands::Clean => {
+            DjWizardCommands::Clean => {
                 format!("dj-wizard clean")
             }
-            SoundeoBotCommands::Info => {
+            DjWizardCommands::Info => {
                 format!("dj-wizard clean")
             }
-            SoundeoBotCommands::Spotify => {
+            DjWizardCommands::Spotify => {
                 format!("dj-wizard spotify")
             }
         }
