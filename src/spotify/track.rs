@@ -3,6 +3,8 @@ use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::search_bar::SoundeoSearchBar;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
+use colored::Colorize;
+use colorize::AnsiColor;
 use error_stack::{Report, ResultExt};
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +30,14 @@ impl SpotifyTrack {
             .search_term(term, &soundeo_user)
             .await
             .change_context(SpotifyError)?;
+        if results.is_empty() {
+            println!(
+                "Tracks not found for song {} by {}",
+                self.title.clone().red(),
+                self.artists.clone().red()
+            );
+            return Ok("".to_string());
+        }
         let mut titles = vec![];
         for result in results.clone() {
             let id = result.value;
@@ -40,15 +50,40 @@ impl SpotifyTrack {
                 titles.push(format!("{} - {}", full_info.title, full_info.track_url));
             }
         }
-        println!("{:#?}", titles);
-        let prompt_text = "Select the correct option".to_string();
+        if titles.is_empty() {
+            println!(
+                "Track is not downloadable, {} by {}: {}",
+                self.title.clone().red(),
+                self.artists.clone().red(),
+                self.get_track_url()
+            );
+            return Ok("".to_string());
+        }
+
+        titles.push("Skip this track".purple().to_string());
+
+        let prompt_text = format!(
+            "Select the correct option for {} by {}: {}",
+            self.title.clone().cyan(),
+            self.artists.clone().cyan(),
+            self.get_track_url()
+        );
+
         let selection =
-            Dialoguer::select(prompt_text, titles, None).change_context(SpotifyError)?;
+            Dialoguer::select(prompt_text, titles.clone(), None).change_context(SpotifyError)?;
+
+        if selection == titles.len() - 1 {
+            return Ok("".to_string());
+        }
         let search_result = results[selection].clone();
         Ok(search_result.value)
     }
 
     pub fn get_track_search_term(&self) -> String {
         format!("{} - {}", self.artists, self.title)
+    }
+
+    pub fn get_track_url(&self) -> String {
+        format!("https://open.spotify.com/track/{}", self.spotify_track_id)
     }
 }

@@ -93,6 +93,7 @@ impl SpotifyCommands {
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
+        let mut soundeo_ids = vec![];
         for (spotify_id, mut track) in playlist.tracks {
             let soundeo_track_id =
                 if let Some(soundeo_track_id) = log.spotify.soundeo_track_ids.get(&spotify_id) {
@@ -105,6 +106,11 @@ impl SpotifyCommands {
                     log.save_log(&soundeo_user).change_context(SpotifyError)?;
                     soundeo_track_id.clone()
                 };
+            if !soundeo_track_id.is_empty() {
+                soundeo_ids.push(soundeo_track_id);
+            }
+        }
+        for soundeo_track_id in soundeo_ids {
             download_track_and_update_log(&mut soundeo_user, &mut log, &soundeo_track_id)
                 .await
                 .change_context(SpotifyError)?;
