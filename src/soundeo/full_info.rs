@@ -24,20 +24,21 @@ where
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SoundeoTrackFullInfo {
-    id: String,
-    title: String,
-    cover: String,
+    pub id: String,
+    pub title: String,
+    pub cover: String,
     #[serde(deserialize_with = "parse_soundeo_url")]
-    track_url: String,
-    release: String,
-    label: String,
-    genre: String,
-    date: String,
+    pub track_url: String,
+    pub release: String,
+    pub label: String,
+    pub genre: String,
+    pub date: String,
     #[serde(deserialize_with = "deserialize_to_number")]
-    bpm: u32,
-    key: String,
+    pub bpm: u32,
+    pub key: String,
     #[serde(rename(deserialize = "format2size"))]
-    size: String,
+    pub size: Option<String>,
+    pub downloadable: bool,
 }
 
 impl SoundeoTrackFullInfo {
@@ -53,7 +54,8 @@ impl SoundeoTrackFullInfo {
             date: "".to_string(),
             bpm: 0,
             key: "".to_string(),
-            size: "".to_string(),
+            size: Some("".to_string()),
+            downloadable: false,
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoResult<()> {
@@ -82,7 +84,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_info() {
-        let track_id = "15573345".to_string();
+        let track_id = "8068396".to_string();
         let mut soundeo_full_info = SoundeoTrackFullInfo::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();

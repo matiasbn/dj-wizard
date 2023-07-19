@@ -133,7 +133,7 @@ mod tests {
         let playlist_url = "https://open.spotify.com/playlist/6YYCPN91F4xI1Z17Hzn7ir".to_string();
         // House
         // let playlist_url = "https://open.spotify.com/playlist/0B2bjiQkVcIHXXgqFb1k7T".to_string();
-        let mut playlist = SpotifyPlaylist::new(playlist_url);
+        let mut playlist = SpotifyPlaylist::new(playlist_url).unwrap();
         playlist.get_playlist_info().await.unwrap();
         // println!("{:#?}", api_response);
     }

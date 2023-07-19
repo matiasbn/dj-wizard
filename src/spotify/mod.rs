@@ -33,12 +33,14 @@ pub type SpotifyResult<T> = error_stack::Result<T, SpotifyError>;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Spotify {
     pub playlists: HashMap<String, SpotifyPlaylist>,
+    pub soundeo_track_ids: HashMap<String, String>,
 }
 
 impl Spotify {
     pub fn new() -> Self {
         Self {
             playlists: HashMap::new(),
+            soundeo_track_ids: HashMap::new(),
         }
     }
 

@@ -6,10 +6,12 @@ use strum::IntoEnumIterator;
 use url::Url;
 
 use crate::dialoguer::Dialoguer;
+use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo_log::DjWizardLog;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
+use crate::utils::download_track_and_update_log;
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
@@ -73,7 +75,7 @@ impl SpotifyCommands {
     }
 
     async fn download_from_playlist() -> SpotifyResult<()> {
-        let log = DjWizardLog::read_log().change_context(SpotifyError)?;
+        let mut log = DjWizardLog::read_log().change_context(SpotifyError)?;
         let playlist_names = log
             .spotify
             .playlists
@@ -86,7 +88,27 @@ impl SpotifyCommands {
         let playlist = log
             .spotify
             .get_playlist_by_name(playlist_names[selection].clone())?;
-        println!("{:#?}", playlist);
+        let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(SpotifyError)?;
+        for (spotify_id, mut track) in playlist.tracks {
+            let soundeo_track_id =
+                if let Some(soundeo_track_id) = log.spotify.soundeo_track_ids.get(&spotify_id) {
+                    soundeo_track_id.clone()
+                } else {
+                    let soundeo_track_id = track.get_soundeo_track_id(&soundeo_user).await?;
+                    log.spotify
+                        .soundeo_track_ids
+                        .insert(spotify_id, soundeo_track_id.clone());
+                    log.save_log(&soundeo_user).change_context(SpotifyError)?;
+                    soundeo_track_id.clone()
+                };
+            download_track_and_update_log(&mut soundeo_user, &mut log, &soundeo_track_id)
+                .await
+                .change_context(SpotifyError)?;
+        }
         Ok(())
     }
 }

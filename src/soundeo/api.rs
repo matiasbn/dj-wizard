@@ -24,7 +24,7 @@ impl SoundeoAPI {
     pub async fn get(&self, soundeo_user: &SoundeoUser) -> SoundeoAPIResult<String> {
         return match self {
             SoundeoAPI::GetTrackInfo { track_id } => {
-                let url = format!("https://www.soundeo.com/tracks/status/{}", track_id);
+                let url = format!("https://soundeo.com/tracks/status/{}", track_id);
                 let response = self.api_get(url, soundeo_user).await?;
                 Ok(response)
             }

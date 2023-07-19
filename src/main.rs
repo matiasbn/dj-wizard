@@ -19,6 +19,7 @@ use crate::soundeo_log::DjWizardLog;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::{SoundeoUser, SoundeoUserConfig};
+use crate::utils::download_track_and_update_log;
 
 mod cleaner;
 mod dialoguer;
@@ -27,6 +28,7 @@ mod soundeo;
 mod soundeo_log;
 mod spotify;
 mod user;
+mod utils;
 
 #[derive(Debug)]
 pub struct DjWizardError;
@@ -232,34 +234,8 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)?;
                 let mut soundeo_log = DjWizardLog::read_log().change_context(DjWizardError)?;
                 for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
-                    // validate if we have can download tracks
-                    soundeo_user
-                        .validate_remaining_downloads()
-                        .change_context(DjWizardError)?;
-                    if soundeo_log.downloaded_tracks.contains_key(track_id) {
-                        println!("Track already downloaded: {}", track_id.clone());
-                        continue;
-                    }
-                    let mut soundeo_track = SoundeoTrack::new(track_id.clone())
-                        .await
-                        .change_context(DjWizardError)?;
-                    let download_result = soundeo_track
-                        .download_track(&mut soundeo_user)
-                        .await
-                        .change_context(DjWizardError);
-                    if let Ok(is_ok) = download_result {
-                        soundeo_log
-                            .write_downloaded_track_to_log(soundeo_track.clone())
-                            .change_context(DjWizardError)?;
-                        soundeo_log
-                            .save_log(&soundeo_user)
-                            .change_context(DjWizardError)?;
-                    } else {
-                        println!(
-                            "Track with id {} was not downloaded",
-                            track_id.clone().red()
-                        );
-                    }
+                    download_track_and_update_log(&mut soundeo_user, &mut soundeo_log, track_id)
+                        .await?;
                 }
                 Ok(())
             }
