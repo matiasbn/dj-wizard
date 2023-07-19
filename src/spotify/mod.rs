@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::spotify::playlist::SpotifyPlaylist;
 
 pub mod api;
@@ -20,6 +22,15 @@ impl std::error::Error for SpotifyError {}
 
 pub type SpotifyResult<T> = error_stack::Result<T, SpotifyError>;
 
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Spotify {
-    playlists: HashMap<String, SpotifyPlaylist>,
+    pub playlists: HashMap<String, SpotifyPlaylist>,
+}
+
+impl Spotify {
+    pub fn new() -> Self {
+        Self {
+            playlists: HashMap::new(),
+        }
+    }
 }
