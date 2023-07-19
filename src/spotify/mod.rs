@@ -5,6 +5,7 @@ use crate::spotify::playlist::SpotifyPlaylist;
 
 pub mod api;
 pub mod playlist;
+pub mod track;
 
 #[derive(Debug)]
 pub struct SpotifyError;

@@ -1,3 +1,4 @@
+use crate::spotify::track::SpotifyTrack;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use error_stack::{FutureExt, IntoReport, ResultExt};
 use headless_chrome::protocol::cdp::Target::CreateTarget;
@@ -32,9 +33,9 @@ impl SpotifyPlaylist {
             .new_tab_with_options(CreateTarget {
                 url: self.url.clone(),
                 width: Some(2000),
-                height: Some(2000000),
+                height: Some(9999),
                 browser_context_id: None,
-                enable_begin_frame_control: None,
+                enable_begin_frame_control: Some(false),
                 new_window: None,
                 background: None,
             })
@@ -43,37 +44,9 @@ impl SpotifyPlaylist {
             .into_report()
             .change_context(SpotifyError)?;
 
-        // let tab = tab
-        //     .set_bounds(Bounds::Normal {
-        //         left: None,
-        //         top: None,
-        //     })
-        //     .unwrap();
+        tab.wait_until_navigated().unwrap();
 
-        // let tab = tab
-        //     .navigate_to(&self.url)
-        //     .ok()
-        //     .ok_or(SpotifyError)
-        //     .into_report()
-        //     .change_context(SpotifyError)?
-        //     .wait_until_navigated()
-        //     .ok()
-        //     .ok_or(SpotifyError)
-        //     .into_report()
-        //     .change_context(SpotifyError)?;
-
-        // Evaluate JavaScript code to scroll to the bottom of the page
-        // let query_selector = "#main > div > div.ZQftYELq0aOsg6tPbVbV > div.jEMA2gVoLgPQqAFrPhFw > div.main-view-container > div.os-host.os-host-foreign.os-theme-spotify.os-host-resize-disabled.os-host-scrollbar-horizontal-hidden.main-view-container__scroll-node.os-host-transition.os-host-overflow.os-host-overflow-y > div.os-padding > div";
-        // let script = format!(
-        //     r#"let el = document.querySelector('{}');
-        //             el.scrollTo({{
-        //             top: document.body.scrollHeight*20,
-        //             behavior: 'smooth',
-        //             }})"#,
-        //     query_selector
-        // );
-        // tab.evaluate(&script, true).unwrap();
-        // tab.wait_until_navigated().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(5));
 
         // let name_element = tab
         //     .find_element("h1.Type__TypeElement-sc-goli3j-0.dYGhLW")
@@ -83,21 +56,18 @@ impl SpotifyPlaylist {
         // self.name = name;
         // println!("{}", self.name.clone());
 
-        let mut tracks = tab.find_elements("div.h4HgbO_Uu1JYg5UGANeQ.wTUruPetkKdWAR1dd6w4");
-        while tracks.is_err() {
-            tracks = tab.find_elements("div.h4HgbO_Uu1JYg5UGANeQ.wTUruPetkKdWAR1dd6w4");
-        }
-        let results = tracks.unwrap();
-        println!("{:#?}", results);
+        let tracks = tab
+            .find_elements("div.h4HgbO_Uu1JYg5UGANeQ.wTUruPetkKdWAR1dd6w4")
+            .unwrap();
         let title_selector = "div.Type__TypeElement-sc-goli3j-0.fZDcWX.t_yrXoUO3qGsJS4Y6iXX.standalone-ellipsis-one-line";
         let artists_selector = "span.Type__TypeElement-sc-goli3j-0.bDHxRN.rq2VQ5mb9SDAFWbBIUIn.standalone-ellipsis-one-line";
-        for element in results {
+        for element in tracks {
             let title_element = element.find_element(title_selector).unwrap();
             let title = title_element.get_inner_text().unwrap();
-            println!("text {:#?}", title);
             let artists_element = element.find_element(artists_selector).unwrap();
             let artists = artists_element.get_inner_text().unwrap();
-            println!("text {:#?}", artists);
+            let spotify_track = SpotifyTrack::new(title, artists);
+            println!("track {:#?}", spotify_track);
         }
 
         // println!("{:#?}", tab.get_document());
