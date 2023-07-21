@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::{env, fmt};
 
-use crate::cleaner::clean_repeated_files;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use error_stack::fmt::{Charset, ColorMode};
@@ -12,21 +11,22 @@ use scraper::{ElementRef, Html, Selector};
 use serde_json::json;
 use url::{Host, Position, Url};
 
+use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
-use crate::soundeo::track::{SoundeoTrack, SoundeoTracksList};
-use crate::soundeo_log::DjWizardLog;
+use crate::log::DjWizardLog;
+use crate::soundeo::track::SoundeoTrack;
+use crate::soundeo::track_list::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::user::{SoundeoUser, SoundeoUserConfig};
+use crate::user::{SoundeoUser, User};
 use crate::utils::download_track_and_update_log;
 
 mod cleaner;
 mod dialoguer;
 mod errors;
 mod ipfs;
+mod log;
 mod soundeo;
-mod soundeo_log;
 mod spotify;
 mod user;
 mod utils;
@@ -76,12 +76,12 @@ impl DjWizardCommands {
     pub async fn execute(&self) -> DjWizardResult<()> {
         return match self {
             DjWizardCommands::Login => {
-                let mut soundeo_user_config = SoundeoUserConfig::new();
+                let mut soundeo_user_config = User::new();
                 let prompt_text = format!("Soundeo user: ");
-                soundeo_user_config.user =
+                soundeo_user_config.soundeo_user =
                     Dialoguer::input(prompt_text).change_context(DjWizardError)?;
                 let prompt_text = format!("Password: ");
-                soundeo_user_config.pass =
+                soundeo_user_config.soundeo_pass =
                     Dialoguer::password(prompt_text).change_context(DjWizardError)?;
                 let home_path = env::var("HOME")
                     .into_report()
@@ -109,27 +109,36 @@ impl DjWizardCommands {
             }
 
             DjWizardCommands::IPFS => {
-                let mut soundeo_user_config = SoundeoUserConfig::new();
-                soundeo_user_config
-                    .read_config_file()
-                    .change_context(DjWizardError)?;
-                let prompt_text = format!("IPFS api key: ");
-                soundeo_user_config.ipfs.api_key =
-                    Dialoguer::input(prompt_text).change_context(DjWizardError)?;
-                let prompt_text = format!("IPFS api key secret: ");
-                soundeo_user_config.ipfs.api_key_secret =
-                    Dialoguer::password(prompt_text).change_context(DjWizardError)?;
-                println!(
-                    "IPFS credentials successfully stored:\n {:#?}",
-                    soundeo_user_config.ipfs
-                );
-                soundeo_user_config
-                    .save_config_file()
-                    .change_context(DjWizardError)?;
+                let options = vec!["Upload log to IPFS", "Update IPFS credentials"];
+                let prompt_text = "What you want to do?".to_string();
+                let selection =
+                    Dialoguer::select(prompt_text, options, None).change_context(DjWizardError)?;
+                if selection == 0 {
+                    let log = DjWizardLog::read_log().change_context(DjWizardError)?;
+                    log.upload_to_ipfs().change_context(DjWizardError)?;
+                } else {
+                    let mut soundeo_user_config = User::new();
+                    soundeo_user_config
+                        .read_config_file()
+                        .change_context(DjWizardError)?;
+                    let prompt_text = format!("IPFS api key: ");
+                    soundeo_user_config.ipfs.api_key =
+                        Dialoguer::input(prompt_text).change_context(DjWizardError)?;
+                    let prompt_text = format!("IPFS api key secret: ");
+                    soundeo_user_config.ipfs.api_key_secret =
+                        Dialoguer::password(prompt_text).change_context(DjWizardError)?;
+                    println!(
+                        "IPFS credentials successfully stored:\n {:#?}",
+                        soundeo_user_config.ipfs
+                    );
+                    soundeo_user_config
+                        .save_config_file()
+                        .change_context(DjWizardError)?;
+                }
                 Ok(())
             }
             DjWizardCommands::Config => {
-                let mut soundeo_bot_config = SoundeoUserConfig::new();
+                let mut soundeo_bot_config = User::new();
                 soundeo_bot_config
                     .read_config_file()
                     .change_context(DjWizardError)?;
@@ -164,7 +173,12 @@ impl DjWizardCommands {
                         format!("{}", track_list.track_ids.len()).cyan()
                     );
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
-                        if soundeo_log.downloaded_tracks.contains_key(track_id) {
+                        let mut track_info = SoundeoTrack::new(track_id.clone());
+                        track_info
+                            .get_info(&soundeo_user)
+                            .await
+                            .change_context(DjWizardError)?;
+                        if track_info.already_downloaded {
                             println!("Track already downloaded: {}", track_id.clone().yellow());
                             continue;
                         }
@@ -208,14 +222,16 @@ impl DjWizardCommands {
                         soundeo_user
                             .validate_remaining_downloads()
                             .change_context(DjWizardError)?;
-                        if soundeo_log.downloaded_tracks.contains_key(&track_id) {
+                        let mut track_info = SoundeoTrack::new(track_id.clone());
+                        track_info
+                            .get_info(&soundeo_user)
+                            .await
+                            .change_context(DjWizardError)?;
+                        if track_info.already_downloaded {
                             println!("Track already downloaded: {}", track_id.clone());
                             continue;
                         }
-                        let mut soundeo_track = SoundeoTrack::new(track_id.clone())
-                            .await
-                            .change_context(DjWizardError)?;
-                        let download_result = soundeo_track
+                        let download_result = track_info
                             .download_track(&mut soundeo_user)
                             .await
                             .change_context(DjWizardError);
@@ -224,7 +240,7 @@ impl DjWizardCommands {
                                 .remove_queued_track_from_log(track_id.clone())
                                 .change_context(DjWizardError)?;
                             soundeo_log
-                                .write_downloaded_track_to_log(soundeo_track.clone())
+                                .mark_track_as_downloaded(track_id.clone())
                                 .change_context(DjWizardError)?;
                             soundeo_log
                                 .save_log(&soundeo_user)
@@ -287,7 +303,7 @@ impl DjWizardCommands {
                     .login_and_update_user_info()
                     .await
                     .change_context(DjWizardError)?;
-                let mut soundeo_track_full_info = SoundeoTrackFullInfo::new(track_id);
+                let mut soundeo_track_full_info = SoundeoTrack::new(track_id);
                 soundeo_track_full_info
                     .get_info(&soundeo_user)
                     .await

@@ -1,5 +1,6 @@
-use crate::spotify::track::SpotifyTrack;
-use crate::spotify::{SpotifyError, SpotifyResult};
+use std::collections::HashMap;
+use std::time::Duration;
+
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
@@ -9,9 +10,10 @@ use headless_chrome::util::Timeout;
 use headless_chrome::{Browser, LaunchOptions};
 use scraper::Selector;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::Duration;
 use url::Url;
+
+use crate::spotify::track::SpotifyTrack;
+use crate::spotify::{SpotifyError, SpotifyResult};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyPlaylist {
@@ -124,8 +126,9 @@ impl SpotifyPlaylist {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::spotify::playlist::SpotifyPlaylist;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_get_playlist() {

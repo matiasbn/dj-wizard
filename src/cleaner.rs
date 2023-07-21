@@ -1,11 +1,13 @@
-use crate::errors::{CleanerError, CleanerResult};
-use colored::*;
-use error_stack::Report;
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+use colored::*;
+use error_stack::Report;
+
+use crate::errors::{CleanerError, CleanerResult};
 
 // Represents a file entry with its path and content hash.
 struct FileEntry {

@@ -1,14 +1,15 @@
-use crate::dialoguer::Dialoguer;
-use crate::soundeo_log::DjWizardLog;
+use std::collections::HashMap;
+use std::fmt;
+
 use colorize::AnsiColor;
 use error_stack::{IntoReport, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt;
 use strum::IntoEnumIterator;
 use url::Url;
 
+use crate::dialoguer::Dialoguer;
+use crate::log::DjWizardLog;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::SoundeoUser;
 

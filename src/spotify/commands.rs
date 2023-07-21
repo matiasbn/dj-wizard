@@ -6,8 +6,7 @@ use strum::IntoEnumIterator;
 use url::Url;
 
 use crate::dialoguer::Dialoguer;
-use crate::soundeo::track::SoundeoTrack;
-use crate::soundeo_log::DjWizardLog;
+use crate::log::DjWizardLog;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;

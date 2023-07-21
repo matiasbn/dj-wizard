@@ -1,12 +1,13 @@
-use crate::dialoguer::Dialoguer;
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
-use crate::soundeo::search_bar::SoundeoSearchBar;
-use crate::spotify::{SpotifyError, SpotifyResult};
-use crate::user::SoundeoUser;
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{Report, ResultExt};
 use serde::{Deserialize, Serialize};
+
+use crate::dialoguer::Dialoguer;
+use crate::soundeo::search_bar::SoundeoSearchBar;
+use crate::soundeo::track::SoundeoTrack;
+use crate::spotify::{SpotifyError, SpotifyResult};
+use crate::user::SoundeoUser;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyTrack {
@@ -45,7 +46,7 @@ impl SpotifyTrack {
         let mut titles = vec![];
         for result in results.clone() {
             let id = result.value;
-            let mut full_info = SoundeoTrackFullInfo::new(id.clone());
+            let mut full_info = SoundeoTrack::new(id.clone());
             full_info
                 .get_info(&soundeo_user)
                 .await
