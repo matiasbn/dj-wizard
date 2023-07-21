@@ -1,3 +1,4 @@
+use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo_log::DjWizardLog;
 use crate::user::SoundeoUser;
@@ -10,12 +11,20 @@ pub async fn download_track_and_update_log(
     soundeo_log: &mut DjWizardLog,
     mut track_id: &String,
 ) -> DjWizardResult<()> {
+    let mut track_info = SoundeoTrackFullInfo::new(track_id.clone());
+    track_info
+        .get_info(&soundeo_user)
+        .await
+        .change_context(DjWizardError)?;
     // validate if we have can download tracks
     soundeo_user
         .validate_remaining_downloads()
         .change_context(DjWizardError)?;
     if soundeo_log.downloaded_tracks.contains_key(track_id) {
-        println!("Track already downloaded: {}", track_id.clone());
+        println!(
+            "Track already downloaded: {},  {}",
+            track_info.title, track_info.track_url
+        );
         return Ok(());
     }
     let mut soundeo_track = SoundeoTrack::new(track_id.clone())

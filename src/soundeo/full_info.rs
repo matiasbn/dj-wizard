@@ -1,6 +1,8 @@
 use crate::soundeo::api::SoundeoAPI;
 use crate::soundeo::{SoundeoError, SoundeoResult};
+use crate::soundeo_log::DjWizardLog;
 use crate::user::SoundeoUser;
+use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, ResultExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -21,7 +23,7 @@ where
     Ok(format!("https://www.soundeo.com{}", partial_url))
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SoundeoTrackFullInfo {
     pub id: String,
@@ -59,21 +61,35 @@ impl SoundeoTrackFullInfo {
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoResult<()> {
-        let api_response = SoundeoAPI::GetTrackInfo {
-            track_id: self.id.clone(),
-        }
-        .get(soundeo_user)
-        .await
-        .change_context(SoundeoError)?;
-        let json: Value = serde_json::from_str(&api_response)
-            .into_report()
-            .change_context(SoundeoError)?;
-        let track = json["track"].clone();
-        let full_info: Self = serde_json::from_value(track)
-            .into_report()
-            .change_context(SoundeoError)?;
-        self.clone_from(&full_info);
-        Ok(())
+        let mut log = DjWizardLog::read_log().change_context(SoundeoError)?;
+        return match log.soundeo.tracks_info.get(&self.id) {
+            Some(full_info) => {
+                self.clone_from(full_info);
+                Ok(())
+            }
+            None => {
+                println!("Getting info for track {}", self.id.clone().cyan());
+                let api_response = SoundeoAPI::GetTrackInfo {
+                    track_id: self.id.clone(),
+                }
+                .get(soundeo_user)
+                .await
+                .change_context(SoundeoError)?;
+                let json: Value = serde_json::from_str(&api_response)
+                    .into_report()
+                    .change_context(SoundeoError)?;
+                let track = json["track"].clone();
+                let full_info: Self = serde_json::from_value(track)
+                    .into_report()
+                    .change_context(SoundeoError)?;
+                self.clone_from(&full_info);
+                log.soundeo
+                    .tracks_info
+                    .insert(self.id.clone(), full_info.clone());
+                log.save_log(&soundeo_user).change_context(SoundeoError)?;
+                Ok(())
+            }
+        };
     }
     // fn parse_json_response(response: String) -> Sounde
 }
