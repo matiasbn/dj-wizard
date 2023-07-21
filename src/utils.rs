@@ -3,8 +3,9 @@ use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo_log::DjWizardLog;
 use crate::user::SoundeoUser;
 use crate::{DjWizardError, DjWizardResult};
+use colored::Colorize;
 use colorize::AnsiColor;
-use error_stack::ResultExt;
+use error_stack::{IntoReport, ResultExt};
 
 pub async fn download_track_and_update_log(
     mut soundeo_user: &mut SoundeoUser,
@@ -48,4 +49,48 @@ pub async fn download_track_and_update_log(
         );
     }
     Ok(())
+}
+
+pub async fn downloaded_tracks_to_soudeo_tracks() -> DjWizardResult<()> {
+    let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
+    soundeo_user
+        .login_and_update_user_info()
+        .await
+        .change_context(DjWizardError)?;
+    let downloaded_tracks = DjWizardLog::read_log()
+        .change_context(DjWizardError)?
+        .downloaded_tracks;
+    let downloaded_tracks_len = downloaded_tracks.len();
+    for (dt_index, (dt_id, downloaded_track)) in downloaded_tracks.into_iter().enumerate() {
+        println!(
+            "Updating {} of {} tracks",
+            format!("{}", dt_index + 1).cyan(),
+            format!("{}", downloaded_tracks_len).cyan(),
+        );
+        let mut log = DjWizardLog::read_log().change_context(DjWizardError)?;
+        if log.soundeo.tracks_info.get(&dt_id).is_some() {
+            println!("Track already stored: {}", dt_id.clone().yellow());
+            continue;
+        }
+        let mut full_info = SoundeoTrackFullInfo::new(dt_id.clone());
+        full_info
+            .get_info(&soundeo_user)
+            .await
+            .change_context(DjWizardError)?;
+        full_info.already_downloaded = true;
+        log.soundeo.tracks_info.insert(dt_id.clone(), full_info);
+        log.save_log(&soundeo_user).change_context(DjWizardError)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_parse_downloaded_track() -> DjWizardResult<()> {
+        downloaded_tracks_to_soudeo_tracks().await?;
+        Ok(())
+    }
 }

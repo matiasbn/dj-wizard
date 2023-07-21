@@ -129,6 +129,22 @@ impl SoundeoUser {
         })
     }
 
+    pub fn get_remamining_downloads_string(&self) -> String {
+        let string = if self.remaining_downloads_bonus == "0".to_string() {
+            format!(
+                "{} tracks before reaching the download limit",
+                self.remaining_downloads.clone().cyan()
+            )
+        } else {
+            format!(
+                "{} (plus {} bonus) tracks before reaching the download limit",
+                self.remaining_downloads.clone().cyan(),
+                self.remaining_downloads_bonus.clone().cyan(),
+            )
+        };
+        string
+    }
+
     pub fn validate_remaining_downloads(&mut self) -> SoundeoUserResult<()> {
         if self.remaining_downloads == "0".to_string()
             && self.remaining_downloads_bonus == "0".to_string()
