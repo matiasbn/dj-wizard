@@ -1,7 +1,9 @@
-use crate::user::SoundeoUser;
-use error_stack::{IntoReport, ResultExt};
 use std::fmt;
 use std::fmt::Write;
+
+use error_stack::{IntoReport, ResultExt};
+
+use crate::user::SoundeoUser;
 
 #[derive(Debug)]
 pub struct SoundeoAPIError;

@@ -1,4 +1,7 @@
-use crate::{DjWizardCommands, Suggestion};
+use std::fmt::Write;
+use std::path::Path;
+use std::{env, fmt, fs, string};
+
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
@@ -9,9 +12,8 @@ use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fmt::Write;
-use std::path::Path;
-use std::{env, fmt, fs, string};
+
+use crate::{DjWizardCommands, Suggestion};
 
 #[derive(Debug, Clone)]
 pub struct SoundeoUserError;

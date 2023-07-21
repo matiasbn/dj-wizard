@@ -1,12 +1,13 @@
+use colored::Colorize;
+use colorize::AnsiColor;
+use error_stack::{Report, ResultExt};
+use serde::{Deserialize, Serialize};
+
 use crate::dialoguer::Dialoguer;
 use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::search_bar::SoundeoSearchBar;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
-use colored::Colorize;
-use colorize::AnsiColor;
-use error_stack::{Report, ResultExt};
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyTrack {

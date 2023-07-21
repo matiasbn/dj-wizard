@@ -1,4 +1,3 @@
-use colored::Colorize;
 use std::collections::{HashMap, HashSet};
 use std::fs::{read_to_string, File};
 use std::io::Cursor;
@@ -6,16 +5,16 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
-use crate::soundeo::track::SoundeoTrack;
-use crate::soundeo::Soundeo;
-use crate::spotify::Spotify;
+use colored::Colorize;
 use error_stack::{IntoReport, ResultExt};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo::Soundeo;
+use crate::spotify::Spotify;
 use crate::user::{IPFSConfig, SoundeoUser, SoundeoUserConfig};
 
 #[derive(Debug)]
@@ -31,9 +30,7 @@ pub type DjWizardLogResult<T> = error_stack::Result<T, DjWizardLogError>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DjWizardLog {
-    pub path: String,
     pub last_update: u64,
-    pub downloaded_tracks: HashMap<String, SoundeoTrack>,
     pub queued_tracks: HashSet<String>,
     pub spotify: Spotify,
     pub soundeo: Soundeo,
@@ -55,9 +52,7 @@ impl DjWizardLog {
             soundeo_log
         } else {
             Self {
-                path: soundeo_log_file_path.to_str().unwrap().to_string(),
                 last_update: 0,
-                downloaded_tracks: HashMap::new(),
                 queued_tracks: HashSet::new(),
                 soundeo: Soundeo::new(),
                 spotify: Spotify::new(),

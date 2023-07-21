@@ -1,17 +1,18 @@
-use crate::soundeo::api::SoundeoAPI;
-use crate::soundeo::{SoundeoError, SoundeoResult};
-use crate::soundeo_log::DjWizardLog;
-use crate::user::SoundeoUser;
+use std::cmp::min;
+use std::fs::File;
+use std::io::Write;
+
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, ResultExt};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::cmp::min;
-use std::fs::File;
-use std::io::Write;
+
+use crate::log::DjWizardLog;
+use crate::soundeo::api::SoundeoAPI;
+use crate::soundeo::{SoundeoError, SoundeoResult};
+use crate::user::SoundeoUser;
 
 pub fn deserialize_to_number<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where

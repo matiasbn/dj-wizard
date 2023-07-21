@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::{env, fmt};
 
-use crate::cleaner::clean_repeated_files;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use error_stack::fmt::{Charset, ColorMode};
@@ -12,10 +11,11 @@ use scraper::{ElementRef, Html, Selector};
 use serde_json::json;
 use url::{Host, Position, Url};
 
+use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
+use crate::log::DjWizardLog;
 use crate::soundeo::full_info::SoundeoTrackFullInfo;
-use crate::soundeo::track::{SoundeoTrack, SoundeoTracksList};
-use crate::soundeo_log::DjWizardLog;
+use crate::soundeo::track::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::{SoundeoUser, SoundeoUserConfig};
@@ -25,8 +25,8 @@ mod cleaner;
 mod dialoguer;
 mod errors;
 mod ipfs;
+mod log;
 mod soundeo;
-mod soundeo_log;
 mod spotify;
 mod user;
 mod utils;
@@ -231,10 +231,7 @@ impl DjWizardCommands {
                             println!("Track already downloaded: {}", track_id.clone());
                             continue;
                         }
-                        let mut soundeo_track = SoundeoTrack::new(track_id.clone())
-                            .await
-                            .change_context(DjWizardError)?;
-                        let download_result = soundeo_track
+                        let download_result = track_info
                             .download_track(&mut soundeo_user)
                             .await
                             .change_context(DjWizardError);
