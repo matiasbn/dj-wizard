@@ -4,7 +4,9 @@ use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::soundeo::full_info::SoundeoTrackFullInfo;
 use crate::soundeo::track::SoundeoTrack;
+use crate::soundeo::Soundeo;
 use crate::spotify::Spotify;
 use error_stack::{IntoReport, ResultExt};
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,7 @@ pub struct DjWizardLog {
     pub downloaded_tracks: HashMap<String, SoundeoTrack>,
     pub queued_tracks: HashSet<String>,
     pub spotify: Spotify,
+    pub soundeo: Soundeo,
 }
 
 impl DjWizardLog {
@@ -51,6 +54,7 @@ impl DjWizardLog {
                 last_update: 0,
                 downloaded_tracks: HashMap::new(),
                 queued_tracks: HashSet::new(),
+                soundeo: Soundeo::new(),
                 spotify: Spotify::new(),
             }
         };

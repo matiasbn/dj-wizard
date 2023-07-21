@@ -1,3 +1,10 @@
+use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo_log::DjWizardLog;
+use crate::user::SoundeoUser;
+use colorize::AnsiColor;
+use error_stack::ResultExt;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 pub mod api;
@@ -17,3 +24,16 @@ impl fmt::Display for SoundeoError {
 impl std::error::Error for SoundeoError {}
 
 pub type SoundeoResult<T> = error_stack::Result<T, SoundeoError>;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Soundeo {
+    pub tracks_info: HashMap<String, SoundeoTrackFullInfo>,
+}
+
+impl Soundeo {
+    pub fn new() -> Self {
+        Self {
+            tracks_info: HashMap::new(),
+        }
+    }
+}
