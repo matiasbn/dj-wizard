@@ -43,7 +43,7 @@ pub struct SoundeoTrackFullInfo {
     pub date: String,
     // #[serde(deserialize_with = "deserialize_to_number")]
     pub bpm: String,
-    pub key: String,
+    pub key: Option<String>,
     #[serde(rename(deserialize = "format2size"))]
     pub size: Option<String>,
     pub downloadable: bool,
@@ -63,7 +63,7 @@ impl SoundeoTrackFullInfo {
             genre: "".to_string(),
             date: "".to_string(),
             bpm: "".to_string(),
-            key: "".to_string(),
+            key: Some("".to_string()),
             size: Some("".to_string()),
             downloadable: false,
             already_downloaded: false,
@@ -183,7 +183,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_info() {
-        let track_id = "8068396".to_string();
+        let track_id = "3834116".to_string();
         let mut soundeo_full_info = SoundeoTrackFullInfo::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();

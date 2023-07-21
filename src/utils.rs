@@ -51,7 +51,7 @@ pub async fn download_track_and_update_log(
     Ok(())
 }
 
-pub async fn downloaded_tracks_to_soudeo_tracks() -> DjWizardResult<()> {
+pub async fn downloaded_tracks_to_soundeo_tracks() -> DjWizardResult<()> {
     let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
     soundeo_user
         .login_and_update_user_info()
@@ -60,12 +60,23 @@ pub async fn downloaded_tracks_to_soudeo_tracks() -> DjWizardResult<()> {
     let downloaded_tracks = DjWizardLog::read_log()
         .change_context(DjWizardError)?
         .downloaded_tracks;
-    let downloaded_tracks_len = downloaded_tracks.len();
-    for (dt_index, (dt_id, downloaded_track)) in downloaded_tracks.into_iter().enumerate() {
+    let mut wlog = DjWizardLog::read_log().change_context(DjWizardError)?;
+    let pending_to_update = downloaded_tracks
+        .into_iter()
+        .filter_map(|track| {
+            if !wlog.soundeo.tracks_info.contains_key(&track.0) {
+                Some(track.0.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let pending_to_update_len = pending_to_update.len();
+    for (dt_index, dt_id) in pending_to_update.into_iter().enumerate() {
         println!(
             "Updating {} of {} tracks",
             format!("{}", dt_index + 1).cyan(),
-            format!("{}", downloaded_tracks_len).cyan(),
+            format!("{}", pending_to_update_len).cyan(),
         );
         let mut log = DjWizardLog::read_log().change_context(DjWizardError)?;
         if log.soundeo.tracks_info.get(&dt_id).is_some() {
@@ -90,7 +101,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_downloaded_track() -> DjWizardResult<()> {
-        downloaded_tracks_to_soudeo_tracks().await?;
+        downloaded_tracks_to_soundeo_tracks().await?;
         Ok(())
     }
 }
