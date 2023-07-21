@@ -81,14 +81,19 @@ impl DjWizardLog {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
     }
 
-    pub fn write_downloaded_track_to_log(&mut self, track: SoundeoTrack) -> DjWizardLogResult<()> {
+    pub fn mark_track_as_downloaded(&mut self, track_id: String) -> DjWizardLogResult<()> {
         self.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        self.downloaded_tracks
-            .insert(track.track_id.clone(), track.clone());
+        let track_info = self
+            .soundeo
+            .tracks_info
+            .get_mut(&track_id)
+            .ok_or(DjWizardLogError)
+            .into_report()?;
+        track_info.already_downloaded = true;
         Ok(())
     }
 
@@ -111,7 +116,7 @@ impl DjWizardLog {
         Ok(result)
     }
 
-    pub fn upload_to_ipfs(&mut self) -> DjWizardLogResult<()> {
+    pub fn upload_to_ipfs(&self) -> DjWizardLogResult<()> {
         println!("Saving the log file to IPFS");
         let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
         let log_path = Self::get_log_path(&soundeo_user);

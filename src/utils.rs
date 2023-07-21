@@ -12,16 +12,16 @@ pub async fn download_track_and_update_log(
     soundeo_log: &mut DjWizardLog,
     mut track_id: &String,
 ) -> DjWizardResult<()> {
+    // validate if we have can download tracks
+    soundeo_user
+        .validate_remaining_downloads()
+        .change_context(DjWizardError)?;
     let mut track_info = SoundeoTrackFullInfo::new(track_id.clone());
     track_info
         .get_info(&soundeo_user)
         .await
         .change_context(DjWizardError)?;
-    // validate if we have can download tracks
-    soundeo_user
-        .validate_remaining_downloads()
-        .change_context(DjWizardError)?;
-    if soundeo_log.downloaded_tracks.contains_key(track_id) {
+    if track_info.already_downloaded {
         println!(
             "Track already downloaded: {},  {}",
             track_info.title, track_info.track_url
@@ -37,7 +37,7 @@ pub async fn download_track_and_update_log(
         .change_context(DjWizardError);
     if let Ok(is_ok) = download_result {
         soundeo_log
-            .write_downloaded_track_to_log(soundeo_track.clone())
+            .mark_track_as_downloaded(track_id.clone())
             .change_context(DjWizardError)?;
         soundeo_log
             .save_log(&soundeo_user)
