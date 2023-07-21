@@ -5,43 +5,45 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
 use crate::soundeo::track::SoundeoTrack;
+use crate::spotify::Spotify;
 use error_stack::{IntoReport, ResultExt};
 use serde::{Deserialize, Serialize};
 
 use crate::user::SoundeoUser;
 
 #[derive(Debug)]
-pub struct SoundeoBotLogError;
-impl fmt::Display for SoundeoBotLogError {
+pub struct DjWizardLogError;
+impl fmt::Display for DjWizardLogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SoundeoBotLog error")
+        f.write_str("Dj Wizard log error")
     }
 }
-impl std::error::Error for SoundeoBotLogError {}
+impl std::error::Error for DjWizardLogError {}
 
-pub type SoundeoBotLogResult<T> = error_stack::Result<T, SoundeoBotLogError>;
+pub type DjWizardLogResult<T> = error_stack::Result<T, DjWizardLogError>;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SoundeoBotLog {
+pub struct DjWizardLog {
     pub path: String,
     pub last_update: u64,
     pub downloaded_tracks: HashMap<String, SoundeoTrack>,
     pub queued_tracks: HashSet<String>,
+    pub spotify: Spotify,
 }
 
-impl SoundeoBotLog {
-    pub fn read_log() -> SoundeoBotLogResult<Self> {
-        let soundeo_user = SoundeoUser::new().change_context(SoundeoBotLogError)?;
+impl DjWizardLog {
+    pub fn read_log() -> DjWizardLogResult<Self> {
+        let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
         let soundeo_log_path = Self::get_log_path(&soundeo_user);
         let soundeo_log_file_path = Path::new(&soundeo_log_path);
         let soundeo_log: Self = if soundeo_log_file_path.is_file() {
             let soundeo_log: Self = serde_json::from_str(
                 &read_to_string(&soundeo_log_file_path)
                     .into_report()
-                    .change_context(SoundeoBotLogError)?,
+                    .change_context(DjWizardLogError)?,
             )
             .into_report()
-            .change_context(SoundeoBotLogError)?;
+            .change_context(DjWizardLogError)?;
             soundeo_log
         } else {
             Self {
@@ -49,19 +51,20 @@ impl SoundeoBotLog {
                 last_update: 0,
                 downloaded_tracks: HashMap::new(),
                 queued_tracks: HashSet::new(),
+                spotify: Spotify::new(),
             }
         };
         Ok(soundeo_log)
     }
 
-    pub fn save_log(&self, soundeo_user: &SoundeoUser) -> SoundeoBotLogResult<()> {
+    pub fn save_log(&self, soundeo_user: &SoundeoUser) -> DjWizardLogResult<()> {
         let save_log_string = serde_json::to_string_pretty(self)
             .into_report()
-            .change_context(SoundeoBotLogError)?;
+            .change_context(DjWizardLogError)?;
         let log_path = Self::get_log_path(soundeo_user);
         fs::write(log_path, &save_log_string)
             .into_report()
-            .change_context(SoundeoBotLogError)?;
+            .change_context(DjWizardLogError)?;
         Ok(())
     }
 
@@ -69,34 +72,31 @@ impl SoundeoBotLog {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
     }
 
-    pub fn write_downloaded_track_to_log(
-        &mut self,
-        track: SoundeoTrack,
-    ) -> SoundeoBotLogResult<()> {
+    pub fn write_downloaded_track_to_log(&mut self, track: SoundeoTrack) -> DjWizardLogResult<()> {
         self.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
-            .change_context(SoundeoBotLogError)?
+            .change_context(DjWizardLogError)?
             .as_secs();
         self.downloaded_tracks
             .insert(track.track_id.clone(), track.clone());
         Ok(())
     }
 
-    pub fn write_queued_track_to_log(&mut self, track_id: String) -> SoundeoBotLogResult<bool> {
+    pub fn write_queued_track_to_log(&mut self, track_id: String) -> DjWizardLogResult<bool> {
         self.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
-            .change_context(SoundeoBotLogError)?
+            .change_context(DjWizardLogError)?
             .as_secs();
         let result = self.queued_tracks.insert(track_id);
         Ok(result)
     }
-    pub fn remove_queued_track_from_log(&mut self, track_id: String) -> SoundeoBotLogResult<bool> {
+    pub fn remove_queued_track_from_log(&mut self, track_id: String) -> DjWizardLogResult<bool> {
         self.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
-            .change_context(SoundeoBotLogError)?
+            .change_context(DjWizardLogError)?
             .as_secs();
         let result = self.queued_tracks.remove(&track_id);
         Ok(result)

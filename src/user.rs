@@ -1,4 +1,4 @@
-use crate::{SoundeoBotCommands, Suggestion};
+use crate::{DjWizardCommands, Suggestion};
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
@@ -235,7 +235,7 @@ impl SoundeoUser {
             .attach_printable(format!("Incorrect user name and/or password"))
             .attach(Suggestion(format!(
                 "Update the username and password by running {} ",
-                SoundeoBotCommands::Login.cli_command().green()
+                DjWizardCommands::Login.cli_command().green()
             )))?
             .to_str()
             .into_report()
