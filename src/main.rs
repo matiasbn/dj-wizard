@@ -24,6 +24,7 @@ use crate::utils::download_track_and_update_log;
 mod cleaner;
 mod dialoguer;
 mod errors;
+mod ipfs;
 mod soundeo;
 mod soundeo_log;
 mod spotify;
@@ -53,6 +54,8 @@ struct Cli {
 enum DjWizardCommands {
     /// Stores the Soundeo credentials
     Login,
+    /// Stores the IPFS credentials
+    IPFS,
     /// Reads the current config file
     Config,
     /// Add tracks to a queue or resumes the download from it
@@ -101,6 +104,27 @@ impl DjWizardCommands {
                 );
                 soundeo_user_config
                     .create_new_config_file()
+                    .change_context(DjWizardError)?;
+                Ok(())
+            }
+
+            DjWizardCommands::IPFS => {
+                let mut soundeo_user_config = SoundeoUserConfig::new();
+                soundeo_user_config
+                    .read_config_file()
+                    .change_context(DjWizardError)?;
+                let prompt_text = format!("IPFS api key: ");
+                soundeo_user_config.ipfs.api_key =
+                    Dialoguer::input(prompt_text).change_context(DjWizardError)?;
+                let prompt_text = format!("IPFS api key secret: ");
+                soundeo_user_config.ipfs.api_key_secret =
+                    Dialoguer::password(prompt_text).change_context(DjWizardError)?;
+                println!(
+                    "IPFS credentials successfully stored:\n {:#?}",
+                    soundeo_user_config.ipfs
+                );
+                soundeo_user_config
+                    .save_config_file()
                     .change_context(DjWizardError)?;
                 Ok(())
             }
@@ -302,6 +326,9 @@ impl DjWizardCommands {
             DjWizardCommands::Spotify => {
                 format!("dj-wizard spotify")
             }
+            DjWizardCommands::IPFS => {
+                format!("dj-wizard ipfs")
+            }
         }
     }
 }
@@ -332,17 +359,4 @@ async fn run() -> DjWizardResult<()> {
 #[tokio::main]
 async fn main() -> DjWizardResult<()> {
     run().await
-    // let query_parameters: HashMap<_, _> = soundeo_url.query_pairs().into_owned().collect();
-    // println!("{:#?}", query_parameters);
-    // let retrieved_page = retrieve_html(soundeo_url.to_string());
-    // let page_body = Html::parse_document(&retrieved_page);
-    // let songs_class = Selector::parse(".trackitem").unwrap();
-    // let mut songs = page_body.select(&songs_class);
-    // let song = songs.next().unwrap();
-    // let track_id = get_track_id(song);
-    // println!("{:#?}", track_id);
-    // for song in page_body.select(&songs_class) {
-    //     let song_title: Vec<_> = song.text().collect();
-    //     println!("{:#?}", song_title);
-    // }
 }
