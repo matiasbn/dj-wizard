@@ -25,9 +25,10 @@ impl std::error::Error for SoundeoUserError {}
 pub type SoundeoUserResult<T> = error_stack::Result<T, SoundeoUserError>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct IPFSCredentials {
+pub struct IPFSConfig {
     pub api_key: String,
     pub api_key_secret: String,
+    pub last_ipfs_hash: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -36,7 +37,7 @@ pub struct SoundeoUserConfig {
     pub pass: String,
     pub download_path: String,
     #[serde(default)]
-    pub ipfs: IPFSCredentials,
+    pub ipfs: IPFSConfig,
 }
 
 impl SoundeoUserConfig {
@@ -45,9 +46,10 @@ impl SoundeoUserConfig {
             user: "".to_string(),
             pass: "".to_string(),
             download_path: "".to_string(),
-            ipfs: IPFSCredentials {
+            ipfs: IPFSConfig {
                 api_key: "".to_string(),
                 api_key_secret: "".to_string(),
+                last_ipfs_hash: "".to_string(),
             },
         }
     }
@@ -74,9 +76,7 @@ impl SoundeoUserConfig {
                 soundeo_bot_config_path
             )));
         }
-        self.user = config.user;
-        self.pass = config.pass;
-        self.download_path = config.download_path;
+        self.clone_from(&config);
         Ok(())
     }
 
