@@ -6,13 +6,13 @@ use error_stack::ResultExt;
 use serde::{Deserialize, Serialize};
 
 use crate::log::DjWizardLog;
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo::track::SoundeoTrack;
 use crate::user::SoundeoUser;
 
 pub mod api;
-pub mod full_info;
 pub mod search_bar;
 pub mod track;
+pub mod track_list;
 
 #[derive(Debug)]
 pub struct SoundeoError;
@@ -29,7 +29,7 @@ pub type SoundeoResult<T> = error_stack::Result<T, SoundeoError>;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Soundeo {
-    pub tracks_info: HashMap<String, SoundeoTrackFullInfo>,
+    pub tracks_info: HashMap<String, SoundeoTrack>,
 }
 
 impl Soundeo {

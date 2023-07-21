@@ -14,8 +14,8 @@ use url::{Host, Position, Url};
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
-use crate::soundeo::track::SoundeoTracksList;
+use crate::soundeo::track::SoundeoTrack;
+use crate::soundeo::track_list::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::{SoundeoUser, SoundeoUserConfig};
@@ -173,7 +173,7 @@ impl DjWizardCommands {
                         format!("{}", track_list.track_ids.len()).cyan()
                     );
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
-                        let mut track_info = SoundeoTrackFullInfo::new(track_id.clone());
+                        let mut track_info = SoundeoTrack::new(track_id.clone());
                         track_info
                             .get_info(&soundeo_user)
                             .await
@@ -222,7 +222,7 @@ impl DjWizardCommands {
                         soundeo_user
                             .validate_remaining_downloads()
                             .change_context(DjWizardError)?;
-                        let mut track_info = SoundeoTrackFullInfo::new(track_id.clone());
+                        let mut track_info = SoundeoTrack::new(track_id.clone());
                         track_info
                             .get_info(&soundeo_user)
                             .await
@@ -303,7 +303,7 @@ impl DjWizardCommands {
                     .login_and_update_user_info()
                     .await
                     .change_context(DjWizardError)?;
-                let mut soundeo_track_full_info = SoundeoTrackFullInfo::new(track_id);
+                let mut soundeo_track_full_info = SoundeoTrack::new(track_id);
                 soundeo_track_full_info
                     .get_info(&soundeo_user)
                     .await

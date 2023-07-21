@@ -12,7 +12,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::Soundeo;
 use crate::spotify::Spotify;
 use crate::user::{IPFSConfig, SoundeoUser, SoundeoUserConfig};

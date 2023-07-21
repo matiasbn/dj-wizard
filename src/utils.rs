@@ -3,7 +3,7 @@ use colorize::AnsiColor;
 use error_stack::{IntoReport, ResultExt};
 
 use crate::log::DjWizardLog;
-use crate::soundeo::full_info::SoundeoTrackFullInfo;
+use crate::soundeo::track::SoundeoTrack;
 use crate::user::SoundeoUser;
 use crate::{DjWizardError, DjWizardResult};
 
@@ -16,7 +16,7 @@ pub async fn download_track_and_update_log(
     soundeo_user
         .validate_remaining_downloads()
         .change_context(DjWizardError)?;
-    let mut track_info = SoundeoTrackFullInfo::new(track_id.clone());
+    let mut track_info = SoundeoTrack::new(track_id.clone());
     track_info
         .get_info(&soundeo_user)
         .await
