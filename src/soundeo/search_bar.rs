@@ -1,10 +1,13 @@
-use crate::soundeo::api::SoundeoAPI;
-use crate::soundeo::{SoundeoError, SoundeoResult};
-use crate::user::SoundeoUser;
+use std::u32;
+
 use error_stack::{FutureExt, IntoReport, ResultExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::u32;
+use strum_macros::Display;
+
+use crate::soundeo::api::SoundeoAPI;
+use crate::soundeo::{SoundeoError, SoundeoResult};
+use crate::user::SoundeoUser;
 
 fn deserialize_to_string<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
@@ -50,13 +53,13 @@ impl SoundeoSearchBar {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SoundeoSearchBarResult {
-    label: String,
-    category: String,
+    pub label: String,
+    pub category: String,
     #[serde(deserialize_with = "deserialize_to_string")]
-    value: String,
+    pub value: String,
 }
 
 #[cfg(test)]

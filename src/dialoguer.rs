@@ -1,8 +1,9 @@
+use std::fmt;
+use std::fmt::Write;
+
 use colored::Colorize;
 use dialoguer::{console::Term, theme::ColorfulTheme, Input, MultiSelect, Password, Select};
 use error_stack::{IntoReport, Result, ResultExt};
-use std::fmt;
-use std::fmt::Write;
 
 #[derive(Debug)]
 pub struct DialoguerError;

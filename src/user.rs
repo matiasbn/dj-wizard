@@ -1,4 +1,7 @@
-use crate::{SoundeoBotCommands, Suggestion};
+use std::fmt::Write;
+use std::path::Path;
+use std::{env, fmt, fs, string};
+
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
@@ -9,9 +12,8 @@ use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::fmt::Write;
-use std::path::Path;
-use std::{env, fmt, fs, string};
+
+use crate::{DjWizardCommands, Suggestion};
 
 #[derive(Debug, Clone)]
 pub struct SoundeoUserError;
@@ -24,24 +26,37 @@ impl std::error::Error for SoundeoUserError {}
 
 pub type SoundeoUserResult<T> = error_stack::Result<T, SoundeoUserError>;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SoundeoUserConfig {
-    pub user: String,
-    pub pass: String,
-    pub download_path: String,
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct IPFSConfig {
+    pub api_key: String,
+    pub api_key_secret: String,
+    pub last_ipfs_hash: String,
 }
 
-impl SoundeoUserConfig {
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct User {
+    pub soundeo_user: String,
+    pub soundeo_pass: String,
+    pub download_path: String,
+    pub ipfs: IPFSConfig,
+}
+
+impl User {
     pub fn new() -> Self {
         Self {
-            user: "".to_string(),
-            pass: "".to_string(),
+            soundeo_user: "".to_string(),
+            soundeo_pass: "".to_string(),
             download_path: "".to_string(),
+            ipfs: IPFSConfig {
+                api_key: "".to_string(),
+                api_key_secret: "".to_string(),
+                last_ipfs_hash: "".to_string(),
+            },
         }
     }
 
     pub fn read_config_file(&mut self) -> SoundeoUserResult<()> {
-        let soundeo_bot_config_path = SoundeoUserConfig::get_config_file_path()?;
+        let soundeo_bot_config_path = User::get_config_file_path()?;
         if !Self::config_file_exists()? {
             return Err(Report::new(SoundeoUserError).attach_printable(format!(
                 "Config file not found at: {}",
@@ -52,19 +67,20 @@ impl SoundeoUserConfig {
         let config_content = fs::read_to_string(&soundeo_bot_config_path)
             .into_report()
             .change_context(SoundeoUserError)?;
-        let config: SoundeoUserConfig = serde_json::from_str(&config_content)
+        let config: User = serde_json::from_str(&config_content)
             .into_report()
             .change_context(SoundeoUserError)?;
 
-        if config.pass.is_empty() || config.user.is_empty() || config.download_path.is_empty() {
+        if config.soundeo_pass.is_empty()
+            || config.soundeo_user.is_empty()
+            || config.download_path.is_empty()
+        {
             return Err(Report::new(SoundeoUserError).attach_printable(format!(
                 "Please fill all the fields of config.json file. Current file is at {}",
                 soundeo_bot_config_path
             )));
         }
-        self.user = config.user;
-        self.pass = config.pass;
-        self.download_path = config.download_path;
+        self.clone_from(&config);
         Ok(())
     }
 
@@ -88,8 +104,19 @@ impl SoundeoUserConfig {
     }
 
     pub fn config_file_exists() -> SoundeoUserResult<bool> {
-        let soundeo_bot_config_path = SoundeoUserConfig::get_config_file_path()?;
+        let soundeo_bot_config_path = User::get_config_file_path()?;
         Ok(Path::new(&soundeo_bot_config_path).exists())
+    }
+
+    pub fn save_config_file(&self) -> SoundeoUserResult<()> {
+        let save_log_string = serde_json::to_string_pretty(self)
+            .into_report()
+            .change_context(SoundeoUserError)?;
+        let log_path = Self::get_config_file_path()?;
+        fs::write(log_path, &save_log_string)
+            .into_report()
+            .change_context(SoundeoUserError)?;
+        Ok(())
     }
 }
 
@@ -111,11 +138,11 @@ pub struct SoundeoUser {
 
 impl SoundeoUser {
     pub fn new() -> SoundeoUserResult<Self> {
-        let mut config = SoundeoUserConfig::new();
+        let mut config = User::new();
         config.read_config_file()?;
         Ok(Self {
-            name: config.user,
-            pass: config.pass,
+            name: config.soundeo_user,
+            pass: config.soundeo_pass,
             download_path: config.download_path,
             cookie: "".to_string(),
             snd: "".to_string(),
@@ -127,6 +154,22 @@ impl SoundeoUser {
             remaining_downloads_bonus: "0".to_string(),
             remaining_time_to_reset: "".to_string(),
         })
+    }
+
+    pub fn get_remamining_downloads_string(&self) -> String {
+        let string = if self.remaining_downloads_bonus == "0".to_string() {
+            format!(
+                "{} tracks before reaching the download limit",
+                self.remaining_downloads.clone().cyan()
+            )
+        } else {
+            format!(
+                "{} (plus {} bonus) tracks before reaching the download limit",
+                self.remaining_downloads.clone().cyan(),
+                self.remaining_downloads_bonus.clone().cyan(),
+            )
+        };
+        string
     }
 
     pub fn validate_remaining_downloads(&mut self) -> SoundeoUserResult<()> {
@@ -235,7 +278,7 @@ impl SoundeoUser {
             .attach_printable(format!("Incorrect user name and/or password"))
             .attach(Suggestion(format!(
                 "Update the username and password by running {} ",
-                SoundeoBotCommands::Login.cli_command().green()
+                DjWizardCommands::Login.cli_command().green()
             )))?
             .to_str()
             .into_report()
@@ -282,6 +325,9 @@ impl SoundeoUser {
             .next()
             .ok_or(SoundeoUserError)
             .into_report()?
+            .trim_start_matches(
+                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in "#,
+            )
             .to_string();
         let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
 

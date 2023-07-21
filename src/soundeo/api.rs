@@ -1,7 +1,9 @@
-use crate::user::SoundeoUser;
-use error_stack::{IntoReport, ResultExt};
 use std::fmt;
 use std::fmt::Write;
+
+use error_stack::{IntoReport, ResultExt};
+
+use crate::user::SoundeoUser;
 
 #[derive(Debug)]
 pub struct SoundeoAPIError;
@@ -24,7 +26,7 @@ impl SoundeoAPI {
     pub async fn get(&self, soundeo_user: &SoundeoUser) -> SoundeoAPIResult<String> {
         return match self {
             SoundeoAPI::GetTrackInfo { track_id } => {
-                let url = format!("https://www.soundeo.com/tracks/status/{}", track_id);
+                let url = format!("https://soundeo.com/tracks/status/{}", track_id);
                 let response = self.api_get(url, soundeo_user).await?;
                 Ok(response)
             }
