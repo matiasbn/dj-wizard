@@ -323,6 +323,9 @@ impl SoundeoUser {
             .next()
             .ok_or(SoundeoUserError)
             .into_report()?
+            .trim_start_matches(
+                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in "#,
+            )
             .to_string();
         let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
 
