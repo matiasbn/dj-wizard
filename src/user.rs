@@ -34,19 +34,18 @@ pub struct IPFSConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
-pub struct SoundeoUserConfig {
-    pub user: String,
-    pub pass: String,
+pub struct User {
+    pub soundeo_user: String,
+    pub soundeo_pass: String,
     pub download_path: String,
-    #[serde(default)]
     pub ipfs: IPFSConfig,
 }
 
-impl SoundeoUserConfig {
+impl User {
     pub fn new() -> Self {
         Self {
-            user: "".to_string(),
-            pass: "".to_string(),
+            soundeo_user: "".to_string(),
+            soundeo_pass: "".to_string(),
             download_path: "".to_string(),
             ipfs: IPFSConfig {
                 api_key: "".to_string(),
@@ -57,7 +56,7 @@ impl SoundeoUserConfig {
     }
 
     pub fn read_config_file(&mut self) -> SoundeoUserResult<()> {
-        let soundeo_bot_config_path = SoundeoUserConfig::get_config_file_path()?;
+        let soundeo_bot_config_path = User::get_config_file_path()?;
         if !Self::config_file_exists()? {
             return Err(Report::new(SoundeoUserError).attach_printable(format!(
                 "Config file not found at: {}",
@@ -68,11 +67,14 @@ impl SoundeoUserConfig {
         let config_content = fs::read_to_string(&soundeo_bot_config_path)
             .into_report()
             .change_context(SoundeoUserError)?;
-        let config: SoundeoUserConfig = serde_json::from_str(&config_content)
+        let config: User = serde_json::from_str(&config_content)
             .into_report()
             .change_context(SoundeoUserError)?;
 
-        if config.pass.is_empty() || config.user.is_empty() || config.download_path.is_empty() {
+        if config.soundeo_pass.is_empty()
+            || config.soundeo_user.is_empty()
+            || config.download_path.is_empty()
+        {
             return Err(Report::new(SoundeoUserError).attach_printable(format!(
                 "Please fill all the fields of config.json file. Current file is at {}",
                 soundeo_bot_config_path
@@ -102,7 +104,7 @@ impl SoundeoUserConfig {
     }
 
     pub fn config_file_exists() -> SoundeoUserResult<bool> {
-        let soundeo_bot_config_path = SoundeoUserConfig::get_config_file_path()?;
+        let soundeo_bot_config_path = User::get_config_file_path()?;
         Ok(Path::new(&soundeo_bot_config_path).exists())
     }
 
@@ -136,11 +138,11 @@ pub struct SoundeoUser {
 
 impl SoundeoUser {
     pub fn new() -> SoundeoUserResult<Self> {
-        let mut config = SoundeoUserConfig::new();
+        let mut config = User::new();
         config.read_config_file()?;
         Ok(Self {
-            name: config.user,
-            pass: config.pass,
+            name: config.soundeo_user,
+            pass: config.soundeo_pass,
             download_path: config.download_path,
             cookie: "".to_string(),
             snd: "".to_string(),

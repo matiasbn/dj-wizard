@@ -18,7 +18,7 @@ use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::user::{SoundeoUser, SoundeoUserConfig};
+use crate::user::{SoundeoUser, User};
 use crate::utils::download_track_and_update_log;
 
 mod cleaner;
@@ -76,12 +76,12 @@ impl DjWizardCommands {
     pub async fn execute(&self) -> DjWizardResult<()> {
         return match self {
             DjWizardCommands::Login => {
-                let mut soundeo_user_config = SoundeoUserConfig::new();
+                let mut soundeo_user_config = User::new();
                 let prompt_text = format!("Soundeo user: ");
-                soundeo_user_config.user =
+                soundeo_user_config.soundeo_user =
                     Dialoguer::input(prompt_text).change_context(DjWizardError)?;
                 let prompt_text = format!("Password: ");
-                soundeo_user_config.pass =
+                soundeo_user_config.soundeo_pass =
                     Dialoguer::password(prompt_text).change_context(DjWizardError)?;
                 let home_path = env::var("HOME")
                     .into_report()
@@ -117,7 +117,7 @@ impl DjWizardCommands {
                     let log = DjWizardLog::read_log().change_context(DjWizardError)?;
                     log.upload_to_ipfs().change_context(DjWizardError)?;
                 } else {
-                    let mut soundeo_user_config = SoundeoUserConfig::new();
+                    let mut soundeo_user_config = User::new();
                     soundeo_user_config
                         .read_config_file()
                         .change_context(DjWizardError)?;
@@ -138,7 +138,7 @@ impl DjWizardCommands {
                 Ok(())
             }
             DjWizardCommands::Config => {
-                let mut soundeo_bot_config = SoundeoUserConfig::new();
+                let mut soundeo_bot_config = User::new();
                 soundeo_bot_config
                     .read_config_file()
                     .change_context(DjWizardError)?;

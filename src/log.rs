@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::Soundeo;
 use crate::spotify::Spotify;
-use crate::user::{IPFSConfig, SoundeoUser, SoundeoUserConfig};
+use crate::user::{IPFSConfig, SoundeoUser, User};
 
 #[derive(Debug)]
 pub struct DjWizardLogError;
@@ -120,7 +120,7 @@ impl DjWizardLog {
             .into_report()
             .change_context(DjWizardLogError)?;
 
-        let mut config_file = SoundeoUserConfig::new();
+        let mut config_file = User::new();
         config_file
             .read_config_file()
             .change_context(DjWizardLogError)?;
