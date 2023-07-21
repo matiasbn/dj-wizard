@@ -24,11 +24,19 @@ impl std::error::Error for SoundeoUserError {}
 
 pub type SoundeoUserResult<T> = error_stack::Result<T, SoundeoUserError>;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct IPFSCredentials {
+    pub api_key: String,
+    pub api_key_secret: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SoundeoUserConfig {
     pub user: String,
     pub pass: String,
     pub download_path: String,
+    #[serde(default)]
+    pub ipfs: IPFSCredentials,
 }
 
 impl SoundeoUserConfig {
@@ -37,6 +45,10 @@ impl SoundeoUserConfig {
             user: "".to_string(),
             pass: "".to_string(),
             download_path: "".to_string(),
+            ipfs: IPFSCredentials {
+                api_key: "".to_string(),
+                api_key_secret: "".to_string(),
+            },
         }
     }
 
@@ -90,6 +102,17 @@ impl SoundeoUserConfig {
     pub fn config_file_exists() -> SoundeoUserResult<bool> {
         let soundeo_bot_config_path = SoundeoUserConfig::get_config_file_path()?;
         Ok(Path::new(&soundeo_bot_config_path).exists())
+    }
+
+    pub fn save_config_file(&self) -> SoundeoUserResult<()> {
+        let save_log_string = serde_json::to_string_pretty(self)
+            .into_report()
+            .change_context(SoundeoUserError)?;
+        let log_path = Self::get_config_file_path()?;
+        fs::write(log_path, &save_log_string)
+            .into_report()
+            .change_context(SoundeoUserError)?;
+        Ok(())
     }
 }
 

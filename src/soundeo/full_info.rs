@@ -21,21 +21,11 @@ where
     s.parse::<u32>().map_err(serde::de::Error::custom)
 }
 
-pub fn parse_soundeo_url<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let partial_url: String = String::deserialize(deserializer)?;
-    Ok(format!("https://www.soundeo.com{}", partial_url))
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SoundeoTrackFullInfo {
     pub id: String,
     pub title: String,
-    pub cover: String,
     #[serde(rename = "trackUrl")]
-    #[serde(deserialize_with = "parse_soundeo_url")]
     pub track_url: String,
     pub release: String,
     pub label: String,
@@ -56,7 +46,6 @@ impl SoundeoTrackFullInfo {
         SoundeoTrackFullInfo {
             id,
             title: "".to_string(),
-            cover: "".to_string(),
             track_url: "".to_string(),
             release: "".to_string(),
             label: "".to_string(),
