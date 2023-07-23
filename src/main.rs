@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::process::Termination;
 use std::{env, fmt};
 
 use clap::{Parser, Subcommand};
@@ -19,7 +20,6 @@ use crate::soundeo::track_list::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::{SoundeoUser, User};
-use crate::utils::download_track_and_update_log;
 
 mod cleaner;
 mod dialoguer;
@@ -29,7 +29,6 @@ mod log;
 mod soundeo;
 mod spotify;
 mod user;
-mod utils;
 
 #[derive(Debug)]
 pub struct DjWizardError;
@@ -196,9 +195,6 @@ impl DjWizardCommands {
                                 "Track with id {} successfully queued",
                                 track_id.clone().green(),
                             );
-                            soundeo_log
-                                .save_log(&soundeo_user)
-                                .change_context(DjWizardError)?;
                         } else {
                             println!(
                                 "Track with id {} was previously queued",
@@ -212,44 +208,30 @@ impl DjWizardCommands {
                         .login_and_update_user_info()
                         .await
                         .change_context(DjWizardError)?;
-                    let mut soundeo_log = DjWizardLog::read_log().change_context(DjWizardError)?;
-                    let queued_tracks = soundeo_log.queued_tracks.clone();
+                    let queued_tracks =
+                        DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
                     println!(
                         "The queue has {} tracks still pending to download",
                         format!("{}", queued_tracks.len()).cyan()
                     );
                     for track_id in queued_tracks {
-                        soundeo_user
-                            .validate_remaining_downloads()
-                            .change_context(DjWizardError)?;
                         let mut track_info = SoundeoTrack::new(track_id.clone());
-                        track_info
-                            .get_info(&soundeo_user)
-                            .await
-                            .change_context(DjWizardError)?;
-                        if track_info.already_downloaded {
-                            println!("Track already downloaded: {}", track_id.clone());
-                            continue;
-                        }
                         let download_result = track_info
                             .download_track(&mut soundeo_user)
                             .await
                             .change_context(DjWizardError);
-                        if let Ok(is_ok) = download_result {
-                            soundeo_log
-                                .remove_queued_track_from_log(track_id.clone())
-                                .change_context(DjWizardError)?;
-                            soundeo_log
-                                .mark_track_as_downloaded(track_id.clone())
-                                .change_context(DjWizardError)?;
-                            soundeo_log
-                                .save_log(&soundeo_user)
-                                .change_context(DjWizardError)?;
-                        } else {
-                            println!(
-                                "Track with id {} was not downloaded",
-                                track_id.clone().red()
-                            );
+                        match download_result {
+                            Ok(_) => {
+                                DjWizardLog::remove_queued_track_from_log(track_id.clone())
+                                    .change_context(DjWizardError)?;
+                            }
+                            Err(error) => {
+                                println!(
+                                    "Track with id {} was not downloaded",
+                                    track_id.clone().red()
+                                );
+                                println!("Error: {:?}", error)
+                            }
                         }
                     }
                 }
@@ -272,10 +254,12 @@ impl DjWizardCommands {
                     .get_tracks_id(&soundeo_user)
                     .await
                     .change_context(DjWizardError)?;
-                let mut soundeo_log = DjWizardLog::read_log().change_context(DjWizardError)?;
-                for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
-                    download_track_and_update_log(&mut soundeo_user, &mut soundeo_log, track_id)
-                        .await?;
+                for (_, track_id) in track_list.track_ids.into_iter().enumerate() {
+                    let mut track = SoundeoTrack::new(track_id);
+                    track
+                        .download_track(&mut soundeo_user)
+                        .await
+                        .change_context(DjWizardError)?;
                 }
                 Ok(())
             }
@@ -303,7 +287,19 @@ impl DjWizardCommands {
                     .login_and_update_user_info()
                     .await
                     .change_context(DjWizardError)?;
-                let mut soundeo_track_full_info = SoundeoTrack::new(track_id);
+                let mut soundeo_track_full_info = SoundeoTrack::new(track_id.clone());
+                soundeo_track_full_info
+                    .get_info(&soundeo_user)
+                    .await
+                    .change_context(DjWizardError)?;
+                println!("{:#?}", soundeo_track_full_info);
+                let mut log = DjWizardLog::read_log().change_context(DjWizardError)?;
+                log.soundeo
+                    .tracks_info
+                    .get_mut(&track_id)
+                    .unwrap()
+                    .already_downloaded = true;
+                log.save_log(&soundeo_user).change_context(DjWizardError)?;
                 soundeo_track_full_info
                     .get_info(&soundeo_user)
                     .await

@@ -172,19 +172,19 @@ impl SoundeoUser {
         string
     }
 
-    pub fn validate_remaining_downloads(&mut self) -> SoundeoUserResult<()> {
-        if self.remaining_downloads == "0".to_string()
-            && self.remaining_downloads_bonus == "0".to_string()
-        {
-            return Err(Report::new(SoundeoUserError)
-                .attach_printable("No more downloads available")
-                .attach(Suggestion(format!(
-                    "Wait {} to start downloading again",
-                    self.remaining_time_to_reset.clone().green()
-                ))));
-        }
-        Ok(())
-    }
+    // pub fn validate_remaining_downloads(&mut self) -> SoundeoUserResult<()> {
+    //     if self.remaining_downloads == "0".to_string()
+    //         && self.remaining_downloads_bonus == "0".to_string()
+    //     {
+    //         return Err(Report::new(SoundeoUserError)
+    //             .attach_printable("No more downloads available")
+    //             .attach(Suggestion(format!(
+    //                 "Wait {} to start downloading again",
+    //                 self.remaining_time_to_reset.clone().green()
+    //             ))));
+    //     }
+    //     Ok(())
+    // }
 
     async fn get_cookie_from_browser(&mut self) -> SoundeoUserResult<()> {
         let browser = Browser::default()

@@ -3,16 +3,17 @@ use std::fs::File;
 use std::io::Write;
 
 use colorize::AnsiColor;
-use error_stack::{FutureExt, IntoReport, ResultExt};
+use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::log::DjWizardLog;
 use crate::soundeo::api::SoundeoAPI;
 use crate::soundeo::{SoundeoError, SoundeoResult};
 use crate::user::SoundeoUser;
+use crate::Suggestion;
 
 pub fn deserialize_to_number<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
@@ -105,17 +106,50 @@ impl SoundeoTrack {
         let json_resp: Value = serde_json::from_str(&response_text)
             .into_report()
             .change_context(SoundeoError)?;
-        let download_url = json_resp["jsActions"]["redirect"]["url"]
-            .clone()
-            .to_string();
-        soundeo_user
-            .login_and_update_user_info()
-            .await
-            .change_context(SoundeoError)?;
-        Ok(download_url)
+        let js_actions = json_resp["jsActions"]
+            .as_object()
+            .ok_or(SoundeoError)
+            .into_report()?;
+        match js_actions.get("flash") {
+            None => {
+                let mut download_url = js_actions["redirect"]["url"].clone().to_string();
+                download_url = download_url
+                    .trim_end_matches("\"")
+                    .trim_start_matches("\"")
+                    .to_string();
+                soundeo_user
+                    .login_and_update_user_info()
+                    .await
+                    .change_context(SoundeoError)?;
+                Ok(download_url)
+            }
+            Some(flash_object) => {
+                // No more downloads available
+                let flash = flash_object.as_object().ok_or(SoundeoError).into_report()?;
+                let message = flash.get("message").unwrap().to_string();
+                return Err(Report::new(SoundeoError).attach(Suggestion(message)));
+            }
+        }
     }
 
     pub async fn download_track(&mut self, soundeo_user: &mut SoundeoUser) -> SoundeoResult<()> {
+        // Get info
+        self.get_info(&soundeo_user).await?;
+        // Check if can be downloaded
+        if self.already_downloaded {
+            println!(
+                "Track already downloaded: {},  {}",
+                self.title, self.track_url
+            );
+            return Ok(());
+        }
+
+        if !self.downloadable {
+            println!("Track isn't downloadable: {}", self.id.clone());
+            return Ok(());
+        }
+
+        // Download
         let download_url = self.get_download_url(soundeo_user).await?;
         let remaining_downloads = soundeo_user.get_remamining_downloads_string();
         println!("{}", remaining_downloads);
@@ -155,9 +189,15 @@ impl SoundeoTrack {
             downloaded = new;
             pb.set_position(new);
         }
-        self.already_downloaded = true;
         let message = format!("{} successfully downloaded", file_name.clone().green());
         pb.finish_with_message(message);
+
+        // Mark as downloaded
+        DjWizardLog::mark_track_as_downloaded(self.id.clone()).change_context(SoundeoError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(SoundeoError)?;
         Ok(())
     }
 

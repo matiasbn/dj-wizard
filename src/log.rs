@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::DjWizardError;
 use colored::Colorize;
 use error_stack::{IntoReport, ResultExt};
 use reqwest::blocking::multipart::Form;
@@ -37,6 +38,10 @@ pub struct DjWizardLog {
 }
 
 impl DjWizardLog {
+    pub fn get_queued_tracks() -> DjWizardLogResult<HashSet<String>> {
+        let log = Self::read_log()?;
+        Ok(log.queued_tracks)
+    }
     pub fn read_log() -> DjWizardLogResult<Self> {
         let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
         let soundeo_log_path = Self::get_log_path(&soundeo_user);
@@ -62,10 +67,11 @@ impl DjWizardLog {
     }
 
     pub fn save_log(&self, soundeo_user: &SoundeoUser) -> DjWizardLogResult<()> {
+        let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
         let save_log_string = serde_json::to_string_pretty(self)
             .into_report()
             .change_context(DjWizardLogError)?;
-        let log_path = Self::get_log_path(soundeo_user);
+        let log_path = Self::get_log_path(&soundeo_user);
         fs::write(log_path, &save_log_string)
             .into_report()
             .change_context(DjWizardLogError)?;
@@ -76,19 +82,21 @@ impl DjWizardLog {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
     }
 
-    pub fn mark_track_as_downloaded(&mut self, track_id: String) -> DjWizardLogResult<()> {
-        self.last_update = SystemTime::now()
+    pub fn mark_track_as_downloaded(track_id: String) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let track_info = self
-            .soundeo
+        log.soundeo
             .tracks_info
             .get_mut(&track_id)
             .ok_or(DjWizardLogError)
-            .into_report()?;
-        track_info.already_downloaded = true;
+            .into_report()?
+            .already_downloaded = true;
+        let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
+        log.save_log(&soundeo_user)?;
         Ok(())
     }
 
@@ -99,15 +107,20 @@ impl DjWizardLog {
             .change_context(DjWizardLogError)?
             .as_secs();
         let result = self.queued_tracks.insert(track_id);
+        let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
+        self.save_log(&soundeo_user)?;
         Ok(result)
     }
-    pub fn remove_queued_track_from_log(&mut self, track_id: String) -> DjWizardLogResult<bool> {
-        self.last_update = SystemTime::now()
+    pub fn remove_queued_track_from_log(track_id: String) -> DjWizardLogResult<bool> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let result = self.queued_tracks.remove(&track_id);
+        let result = log.queued_tracks.remove(&track_id);
+        let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
+        log.save_log(&soundeo_user)?;
         Ok(result)
     }
 
