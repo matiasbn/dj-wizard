@@ -105,8 +105,12 @@ impl SoundeoTrack {
         let json_resp: Value = serde_json::from_str(&response_text)
             .into_report()
             .change_context(SoundeoError)?;
-        let download_url = json_resp["jsActions"]["redirect"]["url"]
+        let mut download_url = json_resp["jsActions"]["redirect"]["url"]
             .clone()
+            .to_string();
+        download_url = download_url
+            .trim_end_matches("\"")
+            .trim_start_matches("\"")
             .to_string();
         soundeo_user
             .login_and_update_user_info()

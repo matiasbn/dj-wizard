@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::process::Termination;
 use std::{env, fmt};
 
 use clap::{Parser, Subcommand};
@@ -231,25 +232,34 @@ impl DjWizardCommands {
                             println!("Track already downloaded: {}", track_id.clone());
                             continue;
                         }
+                        if !track_info.downloadable {
+                            println!("Track can't be downloaded: {}", track_id.clone());
+                            continue;
+                        }
+
                         let download_result = track_info
                             .download_track(&mut soundeo_user)
                             .await
                             .change_context(DjWizardError);
-                        if let Ok(is_ok) = download_result {
-                            soundeo_log
-                                .remove_queued_track_from_log(track_id.clone())
-                                .change_context(DjWizardError)?;
-                            soundeo_log
-                                .mark_track_as_downloaded(track_id.clone())
-                                .change_context(DjWizardError)?;
-                            soundeo_log
-                                .save_log(&soundeo_user)
-                                .change_context(DjWizardError)?;
-                        } else {
-                            println!(
-                                "Track with id {} was not downloaded",
-                                track_id.clone().red()
-                            );
+                        match download_result {
+                            Ok(_) => {
+                                soundeo_log
+                                    .remove_queued_track_from_log(track_id.clone())
+                                    .change_context(DjWizardError)?;
+                                soundeo_log
+                                    .mark_track_as_downloaded(track_id.clone())
+                                    .change_context(DjWizardError)?;
+                                soundeo_log
+                                    .save_log(&soundeo_user)
+                                    .change_context(DjWizardError)?;
+                            }
+                            Err(error) => {
+                                println!(
+                                    "Track with id {} was not downloaded",
+                                    track_id.clone().red()
+                                );
+                                println!("Error: {:?}", error)
+                            }
                         }
                     }
                 }
