@@ -7,10 +7,10 @@ use url::Url;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
+use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
-use crate::utils::download_track_and_update_log;
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
@@ -110,7 +110,9 @@ impl SpotifyCommands {
             }
         }
         for soundeo_track_id in soundeo_ids {
-            download_track_and_update_log(&mut soundeo_user, &mut log, &soundeo_track_id)
+            let mut track = SoundeoTrack::new(soundeo_track_id);
+            track
+                .download_track(&mut soundeo_user)
                 .await
                 .change_context(SpotifyError)?;
         }
