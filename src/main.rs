@@ -293,18 +293,6 @@ impl DjWizardCommands {
                     .await
                     .change_context(DjWizardError)?;
                 println!("{:#?}", soundeo_track_full_info);
-                let mut log = DjWizardLog::read_log().change_context(DjWizardError)?;
-                log.soundeo
-                    .tracks_info
-                    .get_mut(&track_id)
-                    .unwrap()
-                    .already_downloaded = true;
-                log.save_log(&soundeo_user).change_context(DjWizardError)?;
-                soundeo_track_full_info
-                    .get_info(&soundeo_user)
-                    .await
-                    .change_context(DjWizardError)?;
-                println!("{:#?}", soundeo_track_full_info);
                 Ok(())
             }
             DjWizardCommands::Spotify => {
