@@ -9,7 +9,7 @@ use strum::IntoEnumIterator;
 use url::Url;
 
 use crate::dialoguer::Dialoguer;
-use crate::log::DjWizardLog;
+use crate::log::{DjWizardLog, DjWizardLogResult};
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::SoundeoUser;
 
@@ -54,4 +54,13 @@ impl Spotify {
             .into_report()?;
         Ok(playlist.clone())
     }
+}
+
+pub trait SpotifyCRUD {
+    fn create_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()>;
+
+    fn update_spotify_to_soundeo_list(
+        spotify_track_id: String,
+        soundeo_track_id: Option<String>,
+    ) -> DjWizardLogResult<()>;
 }

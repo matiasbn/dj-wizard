@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::log::DjWizardLog;
 use crate::soundeo::api::SoundeoAPI;
-use crate::soundeo::{SoundeoError, SoundeoResult};
+use crate::soundeo::{SoundeoCRUD, SoundeoError, SoundeoResult};
 use crate::user::SoundeoUser;
 use crate::Suggestion;
 
@@ -61,8 +61,8 @@ impl SoundeoTrack {
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoResult<()> {
-        let mut log = DjWizardLog::read_log().change_context(SoundeoError)?;
-        return match log.soundeo.tracks_info.get(&self.id) {
+        let mut soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
+        return match soundeo.tracks_info.get(&self.id) {
             Some(full_info) => {
                 self.clone_from(full_info);
                 Ok(())
@@ -83,10 +83,8 @@ impl SoundeoTrack {
                     .into_report()
                     .change_context(SoundeoError)?;
                 self.clone_from(&full_info);
-                log.soundeo
-                    .tracks_info
-                    .insert(self.id.clone(), full_info.clone());
-                log.save_log(&soundeo_user).change_context(SoundeoError)?;
+                DjWizardLog::create_soundeo_track(full_info.clone())
+                    .change_context(SoundeoError)?;
                 println!(
                     "Track info successfully stored: {}",
                     self.title.clone().green()
