@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::dialoguer::Dialoguer;
+use crate::log::DjWizardLog;
 use colored::Colorize;
 use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
@@ -121,6 +123,20 @@ impl SpotifyPlaylist {
             );
         }
         Ok(())
+    }
+
+    pub fn prompt_select_playlist() -> SpotifyResult<Self> {
+        let mut spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let playlist_names = spotify
+            .playlists
+            .values()
+            .map(|playlist| playlist.name.clone())
+            .collect::<Vec<_>>();
+        let prompt_text = "Select the playlist to download";
+        let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
+            .change_context(SpotifyError)?;
+        let playlist = spotify.get_playlist_by_name(playlist_names[selection].clone())?;
+        Ok(playlist)
     }
 }
 
