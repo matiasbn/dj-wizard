@@ -88,7 +88,7 @@ impl SpotifyCommands {
                     soundeo_track_id.clone()
                 } else {
                     let soundeo_track_id = track.get_soundeo_track_id(&soundeo_user).await?;
-                    DjWizardLog::update_spotify_to_soundeo_list(
+                    DjWizardLog::update_spotify_to_soundeo_track(
                         spotify_id.clone(),
                         soundeo_track_id.clone(),
                     )

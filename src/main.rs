@@ -172,11 +172,11 @@ impl DjWizardCommands {
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
                         let mut track_info = SoundeoTrack::new(track_id.clone());
                         track_info
-                            .get_info(&soundeo_user)
+                            .get_info(&soundeo_user, true)
                             .await
                             .change_context(DjWizardError)?;
                         if track_info.already_downloaded {
-                            println!("Track already downloaded: {}", track_id.clone().yellow());
+                            track_info.print_already_downloaded();
                             continue;
                         }
                         println!(
@@ -286,7 +286,7 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)?;
                 let mut soundeo_track_full_info = SoundeoTrack::new(track_id.clone());
                 soundeo_track_full_info
-                    .get_info(&soundeo_user)
+                    .get_info(&soundeo_user, true)
                     .await
                     .change_context(DjWizardError)?;
                 println!("{:#?}", soundeo_track_full_info);

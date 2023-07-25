@@ -1,3 +1,4 @@
+use colored::Colorize;
 use std::cmp::min;
 use std::fs::File;
 use std::io::Write;
@@ -60,7 +61,7 @@ impl SoundeoTrack {
             already_downloaded: false,
         }
     }
-    pub async fn get_info(&mut self, soundeo_user: &SoundeoUser) -> SoundeoResult<()> {
+    pub async fn get_info(&mut self, soundeo_user: &SoundeoUser, print: bool) -> SoundeoResult<()> {
         let mut soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
         return match soundeo.tracks_info.get(&self.id) {
             Some(full_info) => {
@@ -68,7 +69,9 @@ impl SoundeoTrack {
                 Ok(())
             }
             None => {
-                println!("Getting info for track {}", self.id.clone().cyan());
+                if print {
+                    println!("Getting info for track {}", self.id.clone().cyan());
+                }
                 let api_response = SoundeoAPI::GetTrackInfo {
                     track_id: self.id.clone(),
                 }
@@ -85,10 +88,12 @@ impl SoundeoTrack {
                 self.clone_from(&full_info);
                 DjWizardLog::create_soundeo_track(full_info.clone())
                     .change_context(SoundeoError)?;
-                println!(
-                    "Track info successfully stored: {}",
-                    self.title.clone().green()
-                );
+                if print {
+                    println!(
+                        "Track info successfully stored: {}",
+                        self.title.clone().green()
+                    );
+                }
                 Ok(())
             }
         };
@@ -132,18 +137,15 @@ impl SoundeoTrack {
 
     pub async fn download_track(&mut self, soundeo_user: &mut SoundeoUser) -> SoundeoResult<()> {
         // Get info
-        self.get_info(&soundeo_user).await?;
+        self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded
         if self.already_downloaded {
-            println!(
-                "Track already downloaded: {},  {}",
-                self.title, self.track_url
-            );
+            self.print_already_downloaded();
             return Ok(());
         }
 
         if !self.downloadable {
-            println!("Track isn't downloadable: {}", self.id.clone());
+            self.print_not_downloadable();
             return Ok(());
         }
 
@@ -199,6 +201,26 @@ impl SoundeoTrack {
         Ok(())
     }
 
+    pub fn get_track_url(&self) -> String {
+        format!("https://www.soundeo.com/{}", self.track_url)
+    }
+
+    pub fn print_already_downloaded(&self) {
+        println!(
+            "Track already downloaded: {},  {}",
+            self.title.clone().yellow(),
+            self.get_track_url().yellow()
+        );
+    }
+
+    pub fn print_not_downloadable(&self) {
+        println!(
+            "Track isn't downloadable: {}, {}",
+            self.title.clone().yellow(),
+            self.get_track_url().yellow()
+        );
+    }
+
     fn get_file_name(&self) -> String {
         format!("{}.AIFF", self.title)
     }
@@ -215,7 +237,10 @@ mod tests {
         let mut soundeo_full_info = SoundeoTrack::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();
-        soundeo_full_info.get_info(&soundeo_user).await.unwrap();
+        soundeo_full_info
+            .get_info(&soundeo_user, true)
+            .await
+            .unwrap();
         println!("{:#?}", soundeo_full_info);
     }
 }

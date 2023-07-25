@@ -226,7 +226,7 @@ impl SpotifyCRUD for DjWizardLog {
         Ok(())
     }
 
-    fn update_spotify_to_soundeo_list(
+    fn update_spotify_to_soundeo_track(
         spotify_track_id: String,
         soundeo_track_id: Option<String>,
     ) -> DjWizardLogResult<()> {
@@ -245,7 +245,6 @@ mod tests {
 
     #[test]
     fn test_upload_to_ipfs() {
-        let mut log = DjWizardLog::read_log().unwrap();
-        log.upload_to_ipfs().unwrap();
+        DjWizardLog::upload_to_ipfs().unwrap();
     }
 }
