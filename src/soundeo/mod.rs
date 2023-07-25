@@ -5,7 +5,7 @@ use colorize::AnsiColor;
 use error_stack::ResultExt;
 use serde::{Deserialize, Serialize};
 
-use crate::log::DjWizardLog;
+use crate::log::{DjWizardLog, DjWizardLogResult};
 use crate::soundeo::track::SoundeoTrack;
 use crate::user::SoundeoUser;
 
@@ -38,4 +38,10 @@ impl Soundeo {
             tracks_info: HashMap::new(),
         }
     }
+}
+
+pub trait SoundeoCRUD {
+    fn create_soundeo_track(soundeo_track: SoundeoTrack) -> DjWizardLogResult<()>;
+
+    fn mark_track_as_downloaded(soundeo_track_id: String) -> DjWizardLogResult<()>;
 }

@@ -48,11 +48,15 @@ impl SpotifyTrack {
             let id = result.value;
             let mut full_info = SoundeoTrack::new(id.clone());
             full_info
-                .get_info(&soundeo_user)
+                .get_info(&soundeo_user, false)
                 .await
                 .change_context(SpotifyError)?;
             if full_info.downloadable {
-                titles.push(format!("{} - {}", full_info.title, full_info.track_url));
+                titles.push(format!(
+                    "{} - {}",
+                    full_info.title,
+                    full_info.get_track_url()
+                ));
             }
         }
         if titles.is_empty() {

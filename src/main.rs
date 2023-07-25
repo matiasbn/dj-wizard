@@ -113,8 +113,7 @@ impl DjWizardCommands {
                 let selection =
                     Dialoguer::select(prompt_text, options, None).change_context(DjWizardError)?;
                 if selection == 0 {
-                    let log = DjWizardLog::read_log().change_context(DjWizardError)?;
-                    log.upload_to_ipfs().change_context(DjWizardError)?;
+                    DjWizardLog::upload_to_ipfs().change_context(DjWizardError)?;
                 } else {
                     let mut soundeo_user_config = User::new();
                     soundeo_user_config
@@ -166,7 +165,6 @@ impl DjWizardCommands {
                         .get_tracks_id(&soundeo_user)
                         .await
                         .change_context(DjWizardError)?;
-                    let mut soundeo_log = DjWizardLog::read_log().change_context(DjWizardError)?;
                     println!(
                         "Queueing {} tracks",
                         format!("{}", track_list.track_ids.len()).cyan()
@@ -174,11 +172,11 @@ impl DjWizardCommands {
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
                         let mut track_info = SoundeoTrack::new(track_id.clone());
                         track_info
-                            .get_info(&soundeo_user)
+                            .get_info(&soundeo_user, true)
                             .await
                             .change_context(DjWizardError)?;
                         if track_info.already_downloaded {
-                            println!("Track already downloaded: {}", track_id.clone().yellow());
+                            track_info.print_already_downloaded();
                             continue;
                         }
                         println!(
@@ -187,8 +185,7 @@ impl DjWizardCommands {
                             track_id_index + 1,
                             track_list.track_ids.len()
                         );
-                        let queue_result = soundeo_log
-                            .write_queued_track_to_log(track_id.clone())
+                        let queue_result = DjWizardLog::enqueue_track_to_log(track_id.clone())
                             .change_context(DjWizardError)?;
                         if queue_result {
                             println!(
@@ -289,7 +286,7 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)?;
                 let mut soundeo_track_full_info = SoundeoTrack::new(track_id.clone());
                 soundeo_track_full_info
-                    .get_info(&soundeo_user)
+                    .get_info(&soundeo_user, true)
                     .await
                     .change_context(DjWizardError)?;
                 println!("{:#?}", soundeo_track_full_info);
