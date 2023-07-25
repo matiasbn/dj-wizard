@@ -1,5 +1,6 @@
+use colored::Colorize;
 use colorize::AnsiColor;
-use error_stack::{IntoReport, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -11,6 +12,7 @@ use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
+use crate::{DjWizardCommands, Suggestion};
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
@@ -26,9 +28,7 @@ impl SpotifyCommands {
             Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
         return match Self::get_selection(selection) {
             SpotifyCommands::AddNewPlaylist => Self::add_new_playlist().await,
-            SpotifyCommands::UpdatePlaylist => {
-                unimplemented!()
-            }
+            SpotifyCommands::UpdatePlaylist => Self::update_playlist().await,
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
         };
     }
@@ -53,48 +53,76 @@ impl SpotifyCommands {
 
         let mut playlist =
             SpotifyPlaylist::new(playlist_url.to_string()).change_context(SpotifyError)?;
+
+        // check if already added
+        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let stored_playlist = spotify.playlists.get(&playlist.spotify_playlist_id.clone());
+
+        return match stored_playlist {
+            Some(stored) => {
+                return Err(Report::new(SpotifyError)
+                    .attach_printable(format!(
+                        "Spotify playlist {} already added",
+                        stored.name.clone().yellow()
+                    ))
+                    .attach(Suggestion(format!(
+                        "Update the playlist by running {} and update selecting the correct option",
+                        DjWizardCommands::Spotify.cli_command().yellow()
+                    ))));
+            }
+            None => {
+                playlist
+                    .get_playlist_info()
+                    .await
+                    .change_context(SpotifyError)?;
+                DjWizardLog::create_spotify_playlist(playlist.clone())
+                    .change_context(SpotifyError)?;
+                println!(
+                    "Playlist {} successfully stored",
+                    playlist.name.clone().green()
+                );
+                Ok(())
+            }
+        };
+    }
+
+    async fn update_playlist() -> SpotifyResult<()> {
+        let mut playlist = SpotifyPlaylist::prompt_select_playlist()?;
         playlist
             .get_playlist_info()
             .await
             .change_context(SpotifyError)?;
         DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
         println!(
-            "Playlist {} successfully stored",
+            "Playlist {} successfully updated",
             playlist.name.clone().green()
         );
         Ok(())
     }
 
     async fn download_from_playlist() -> SpotifyResult<()> {
-        let mut spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let playlist_names = spotify
-            .playlists
-            .values()
-            .map(|playlist| playlist.name.clone())
-            .collect::<Vec<_>>();
-        let prompt_text = "Select the playlist to download";
-        let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
-            .change_context(SpotifyError)?;
-        let playlist = spotify.get_playlist_by_name(playlist_names[selection].clone())?;
+        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let playlist = SpotifyPlaylist::prompt_select_playlist()?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
         let mut soundeo_ids = vec![];
-        for (spotify_id, mut track) in playlist.tracks {
-            let soundeo_track_id =
-                if let Some(soundeo_track_id) = spotify.soundeo_track_ids.get(&spotify_id) {
-                    soundeo_track_id.clone()
-                } else {
-                    let soundeo_track_id = track.get_soundeo_track_id(&soundeo_user).await?;
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_id.clone(),
-                        soundeo_track_id.clone(),
-                    )
-                    .change_context(SpotifyError)?;
-                    soundeo_track_id.clone()
-                };
+        for (spotify_track_id, mut spotify_track) in playlist.tracks {
+            let soundeo_track_id = if let Some(soundeo_track_id) =
+                spotify.soundeo_track_ids.get(&spotify_track_id)
+            {
+                soundeo_track_id.clone()
+            } else {
+                let soundeo_track_id = spotify_track.get_soundeo_track_id(&soundeo_user).await?;
+                DjWizardLog::update_spotify_to_soundeo_track(
+                    spotify_track_id.clone(),
+                    soundeo_track_id.clone(),
+                )
+                .change_context(SpotifyError)?;
+                soundeo_track_id.clone()
+            };
             if soundeo_track_id.is_some() {
                 soundeo_ids.push(soundeo_track_id.clone().unwrap());
             }
