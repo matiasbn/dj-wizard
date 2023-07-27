@@ -19,7 +19,7 @@ pub enum SpotifyCommands {
     AddNewPlaylist,
     UpdatePlaylist,
     DownloadTracksFromPlaylist,
-    PrintDownloadedSongsByPlaylist,
+    PrintDownloadedTracksByPlaylist,
 }
 
 impl SpotifyCommands {
@@ -31,7 +31,7 @@ impl SpotifyCommands {
             SpotifyCommands::AddNewPlaylist => Self::add_new_playlist().await,
             SpotifyCommands::UpdatePlaylist => Self::update_playlist().await,
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
-            SpotifyCommands::PrintDownloadedSongsByPlaylist => {
+            SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
             }
         };
@@ -152,19 +152,21 @@ impl SpotifyCommands {
             .filter_map(|(_, soundeo_id)| soundeo_id)
             .collect::<Vec<_>>();
         let soundeo = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
-        let downloaded_tracks = soundeo
+        let mut downloaded_tracks = soundeo
             .tracks_info
             .into_iter()
             .filter(|(soundeo_track_id, _)| {
                 spotify_mapped_tracks.contains(&soundeo_track_id.clone())
             })
             .collect::<Vec<_>>();
+        downloaded_tracks.sort_by_key(|(_, soundeo_track)| soundeo_track.title.clone());
         println!(
             "Playlist {} has {} tracks, {} were already downloaded",
             playlist.name.green(),
             format!("{}", playlist.tracks.len()).green(),
             format!("{}", downloaded_tracks.len()).green(),
         );
+        println!("Downloaded tracks sorted by artist name:");
         for (_, soundeo_track) in downloaded_tracks {
             println!(
                 "{}: {}",
