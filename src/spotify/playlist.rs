@@ -125,14 +125,13 @@ impl SpotifyPlaylist {
         Ok(())
     }
 
-    pub fn prompt_select_playlist() -> SpotifyResult<Self> {
+    pub fn prompt_select_playlist(prompt_text: &str) -> SpotifyResult<Self> {
         let mut spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         let playlist_names = spotify
             .playlists
             .values()
             .map(|playlist| playlist.name.clone())
             .collect::<Vec<_>>();
-        let prompt_text = "Select the playlist to download";
         let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
             .change_context(SpotifyError)?;
         let playlist = spotify.get_playlist_by_name(playlist_names[selection].clone())?;

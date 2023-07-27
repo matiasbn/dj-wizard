@@ -19,6 +19,7 @@ pub enum SpotifyCommands {
     AddNewPlaylist,
     UpdatePlaylist,
     DownloadTracksFromPlaylist,
+    PrintDownloadedSongsByPlaylist,
 }
 
 impl SpotifyCommands {
@@ -30,6 +31,9 @@ impl SpotifyCommands {
             SpotifyCommands::AddNewPlaylist => Self::add_new_playlist().await,
             SpotifyCommands::UpdatePlaylist => Self::update_playlist().await,
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
+            SpotifyCommands::PrintDownloadedSongsByPlaylist => {
+                Self::print_downloaded_songs_by_playlist()
+            }
         };
     }
 
@@ -87,7 +91,8 @@ impl SpotifyCommands {
     }
 
     async fn update_playlist() -> SpotifyResult<()> {
-        let mut playlist = SpotifyPlaylist::prompt_select_playlist()?;
+        let mut playlist =
+            SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         playlist
             .get_playlist_info()
             .await
@@ -102,7 +107,7 @@ impl SpotifyCommands {
 
     async fn download_from_playlist() -> SpotifyResult<()> {
         let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let playlist = SpotifyPlaylist::prompt_select_playlist()?;
+        let playlist = SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
@@ -133,6 +138,39 @@ impl SpotifyCommands {
                 .download_track(&mut soundeo_user)
                 .await
                 .change_context(SpotifyError)?;
+        }
+        Ok(())
+    }
+
+    fn print_downloaded_songs_by_playlist() -> SpotifyResult<()> {
+        let playlist = SpotifyPlaylist::prompt_select_playlist("Select the playlist to print")?;
+        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let spotify_mapped_tracks = spotify
+            .soundeo_track_ids
+            .into_iter()
+            .filter(|(spotify_id, _)| playlist.tracks.contains_key(spotify_id))
+            .filter_map(|(_, soundeo_id)| soundeo_id)
+            .collect::<Vec<_>>();
+        let soundeo = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
+        let downloaded_tracks = soundeo
+            .tracks_info
+            .into_iter()
+            .filter(|(soundeo_track_id, _)| {
+                spotify_mapped_tracks.contains(&soundeo_track_id.clone())
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "Playlist {} has {} tracks, {} were already downloaded",
+            playlist.name.green(),
+            format!("{}", playlist.tracks.len()).green(),
+            format!("{}", downloaded_tracks.len()).green(),
+        );
+        for (_, soundeo_track) in downloaded_tracks {
+            println!(
+                "{}: {}",
+                soundeo_track.title.clone().green(),
+                soundeo_track.clone().get_track_url().cyan()
+            );
         }
         Ok(())
     }
