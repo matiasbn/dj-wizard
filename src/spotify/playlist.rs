@@ -73,7 +73,7 @@ impl SpotifyPlaylist {
             .change_context(SpotifyError)?;
 
         println!("Loading the playlist...");
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_secs(20));
 
         println!("Getting the playlist name...");
         let name_element = tab
