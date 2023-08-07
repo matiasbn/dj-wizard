@@ -69,6 +69,17 @@ impl SpotifyTrack {
             return Ok(None);
         }
 
+        if titles.len() == 1 {
+            let track_data = format!(
+                "{} by {}: {}",
+                self.title.clone().cyan(),
+                self.artists.clone().cyan(),
+                self.get_track_url()
+            );
+            println!("Track found for {} \n {}", track_data, titles[0]);
+            return Ok(Some(results[0].value.clone()));
+        }
+
         titles.push("Skip this track".purple().to_string());
 
         let prompt_text = format!(
