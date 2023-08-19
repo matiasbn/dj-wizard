@@ -58,8 +58,12 @@ enum DjWizardCommands {
     /// Reads the current config file
     Config,
     /// Add tracks to a queue or resumes the download from it
-    Queue,
-    /// Downloads the tracks from a Soundeo url
+    Queue {
+        /// if true, first add songs to the collection
+        #[arg(short, long)]
+        add: bool,
+    },
+    /// Add all the tracks from a url to the Soundeo collection and queue them
     Url,
     /// Clean all the repeated files starting on a path.
     /// Thought to be used to clean repeated files
@@ -143,7 +147,7 @@ impl DjWizardCommands {
                 println!("Current config:\n{:#?}", soundeo_bot_config);
                 Ok(())
             }
-            DjWizardCommands::Queue => {
+            DjWizardCommands::Queue { add } => {
                 let options = vec!["Add to queue", "Resume queue"];
                 let prompt_text = "What you want to do?".to_string();
                 let selection =
@@ -170,6 +174,12 @@ impl DjWizardCommands {
                         format!("{}", track_list.track_ids.len()).cyan()
                     );
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
+                        println!("-----------------------------------------------------------------------------");
+                        println!(
+                            "Queueing track with id {} of {}",
+                            track_id_index + 1,
+                            track_list.track_ids.len()
+                        );
                         let mut track_info = SoundeoTrack::new(track_id.clone());
                         track_info
                             .get_info(&soundeo_user, true)
@@ -179,12 +189,25 @@ impl DjWizardCommands {
                             track_info.print_already_downloaded();
                             continue;
                         }
-                        println!(
-                            "Queueing track with id {}, {} of {}",
-                            track_id.clone().cyan(),
-                            track_id_index + 1,
-                            track_list.track_ids.len()
-                        );
+                        if *add {
+                            println!(
+                                "Adding {} to the Soundeo collection",
+                                track_info.title.cyan()
+                            );
+                            let download_url_result =
+                                track_info.get_download_url(&mut soundeo_user).await;
+                            match download_url_result {
+                                Ok(url) => {
+                                    println!(
+                                        "Track successfully added to the {}",
+                                        "Soundeo collection".green()
+                                    );
+                                }
+                                Err(err) => {
+                                    println!("Track wasn't added to the collection:\n{}", err);
+                                }
+                            }
+                        }
                         let queue_result = DjWizardLog::enqueue_track_to_log(track_id.clone())
                             .change_context(DjWizardError)?;
                         if queue_result {
@@ -195,7 +218,7 @@ impl DjWizardCommands {
                         } else {
                             println!(
                                 "Track with id {} was previously queued",
-                                track_id.clone().red(),
+                                track_id.clone().yellow(),
                             );
                         }
                     }
@@ -251,6 +274,7 @@ impl DjWizardCommands {
                     .get_tracks_id(&soundeo_user)
                     .await
                     .change_context(DjWizardError)?;
+                // Add all tracks to collection by
                 for (_, track_id) in track_list.track_ids.into_iter().enumerate() {
                     let mut track = SoundeoTrack::new(track_id);
                     track
@@ -308,7 +332,7 @@ impl DjWizardCommands {
             DjWizardCommands::Config => {
                 format!("dj-wizard config")
             }
-            DjWizardCommands::Queue => {
+            DjWizardCommands::Queue { add } => {
                 format!("dj-wizard queue")
             }
             DjWizardCommands::Url => {
