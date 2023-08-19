@@ -99,7 +99,7 @@ impl SoundeoTrack {
         };
     }
 
-    async fn get_download_url(&self, soundeo_user: &mut SoundeoUser) -> SoundeoResult<String> {
+    pub async fn get_download_url(&self, soundeo_user: &mut SoundeoUser) -> SoundeoResult<String> {
         let response_text = SoundeoAPI::GetTrackDownloadUrl {
             track_id: self.id.clone(),
         }

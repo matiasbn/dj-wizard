@@ -19,6 +19,7 @@ pub enum SpotifyCommands {
     AddNewPlaylist,
     UpdatePlaylist,
     DownloadTracksFromPlaylist,
+    // CreateSpotifyPlaylistFile,
     PrintDownloadedTracksByPlaylist,
 }
 
@@ -174,6 +175,14 @@ impl SpotifyCommands {
                 soundeo_track.clone().get_track_url().cyan()
             );
         }
+        Ok(())
+    }
+
+    fn create_spotify_playlist_file() -> SpotifyResult<()> {
+        let prompt_text = "Select the playlist to create the m3u8 file";
+        let playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
+        let mut file_content = "#EXTM3U";
+
         Ok(())
     }
 }
