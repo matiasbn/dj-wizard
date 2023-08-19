@@ -176,7 +176,7 @@ impl DjWizardCommands {
                     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
                         println!("-----------------------------------------------------------------------------");
                         println!(
-                            "Queueing track with id {} of {}",
+                            "Queueing track {} of {}",
                             track_id_index + 1,
                             track_list.track_ids.len()
                         );
@@ -204,7 +204,7 @@ impl DjWizardCommands {
                                     );
                                 }
                                 Err(err) => {
-                                    println!("Track wasn't added to the collection:\n{}", err);
+                                    println!("Error adding track to the collection:\n{:#?}", err);
                                 }
                             }
                         }
