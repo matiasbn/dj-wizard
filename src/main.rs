@@ -189,25 +189,7 @@ impl DjWizardCommands {
                             track_info.print_already_downloaded();
                             continue;
                         }
-                        if *add {
-                            println!(
-                                "Adding {} to the Soundeo collection",
-                                track_info.title.cyan()
-                            );
-                            let download_url_result =
-                                track_info.get_download_url(&mut soundeo_user).await;
-                            match download_url_result {
-                                Ok(url) => {
-                                    println!(
-                                        "Track successfully added to the {}",
-                                        "Soundeo collection".green()
-                                    );
-                                }
-                                Err(err) => {
-                                    println!("Error adding track to the collection:\n{:#?}", err);
-                                }
-                            }
-                        }
+
                         let queue_result = DjWizardLog::enqueue_track_to_log(track_id.clone())
                             .change_context(DjWizardError)?;
                         if queue_result {
@@ -215,6 +197,28 @@ impl DjWizardCommands {
                                 "Track with id {} successfully queued",
                                 track_id.clone().green(),
                             );
+                            if *add {
+                                println!(
+                                    "Adding {} to the Soundeo collection",
+                                    track_info.title.cyan()
+                                );
+                                let download_url_result =
+                                    track_info.get_download_url(&mut soundeo_user).await;
+                                match download_url_result {
+                                    Ok(url) => {
+                                        println!(
+                                            "Track successfully added to the {}",
+                                            "Soundeo collection".green()
+                                        );
+                                    }
+                                    Err(err) => {
+                                        println!(
+                                            "Error adding track to the collection:\n{:#?}",
+                                            err
+                                        );
+                                    }
+                                }
+                            }
                         } else {
                             println!(
                                 "Track with id {} was previously queued",
