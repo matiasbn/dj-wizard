@@ -89,6 +89,13 @@ impl User {
             .into_report()
             .change_context(SoundeoUserError)?;
         let config_path = Self::get_config_file_path()?;
+        let folder_path = config_path.trim_end_matches("/config.json");
+        let folder_exists = Path::new(folder_path).exists();
+        if !folder_exists {
+            fs::create_dir(folder_path)
+                .into_report()
+                .change_context(SoundeoUserError)?;
+        }
         fs::write(config_path, serialized)
             .into_report()
             .change_context(SoundeoUserError)?;
@@ -99,7 +106,7 @@ impl User {
         let home_path = env::var("HOME")
             .into_report()
             .change_context(SoundeoUserError)?;
-        let string_path = format!("{}/.soundeo_bot_config/config.json", home_path);
+        let string_path = format!("{}/.dj_wizard_config/config.json", home_path);
         Ok(string_path)
     }
 
