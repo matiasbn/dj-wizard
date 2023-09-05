@@ -175,7 +175,11 @@ impl SoundeoTrack {
         ));
 
         let mut stream = response.bytes_stream();
-        let file_path = format!("{}/{}", soundeo_user.download_path, file_name);
+        let file_path = format!(
+            "{}/{}",
+            soundeo_user.download_path,
+            file_name.replace("/", ",")
+        );
         let mut dest = File::create(file_path.clone())
             .into_report()
             .change_context(SoundeoError)?;
@@ -242,5 +246,15 @@ mod tests {
             .await
             .unwrap();
         println!("{:#?}", soundeo_full_info);
+    }
+
+    #[tokio::test]
+    async fn test_get_track() {
+        let track_id = "12285307".to_string();
+        let mut track = SoundeoTrack::new(track_id);
+        let mut soundeo_user = SoundeoUser::new().unwrap();
+        soundeo_user.login_and_update_user_info().await.unwrap();
+        track.download_track(&mut soundeo_user).await.unwrap();
+        println!("{:#?}", track);
     }
 }
