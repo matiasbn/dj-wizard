@@ -136,7 +136,7 @@ impl SpotifyCommands {
         for soundeo_track_id in soundeo_ids {
             let mut track = SoundeoTrack::new(soundeo_track_id);
             track
-                .download_track(&mut soundeo_user)
+                .download_track(&mut soundeo_user, true)
                 .await
                 .change_context(SpotifyError)?;
         }
