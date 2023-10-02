@@ -135,7 +135,11 @@ impl SoundeoTrack {
         }
     }
 
-    pub async fn download_track(&mut self, soundeo_user: &mut SoundeoUser) -> SoundeoResult<()> {
+    pub async fn download_track(
+        &mut self,
+        soundeo_user: &mut SoundeoUser,
+        print_remaining_downloads: bool,
+    ) -> SoundeoResult<()> {
         // Get info
         self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded
@@ -151,8 +155,10 @@ impl SoundeoTrack {
 
         // Download
         let download_url = self.get_download_url(soundeo_user).await?;
-        let remaining_downloads = soundeo_user.get_remamining_downloads_string();
-        println!("{}", remaining_downloads);
+        if print_remaining_downloads {
+            let remaining_downloads = soundeo_user.get_remamining_downloads_string();
+            println!("{}", remaining_downloads);
+        }
         let mut downloaded: u64 = 0;
         let client = reqwest::Client::new();
         let response = client
@@ -262,7 +268,7 @@ mod tests {
         let mut track = SoundeoTrack::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();
-        track.download_track(&mut soundeo_user).await.unwrap();
+        track.download_track(&mut soundeo_user, true).await.unwrap();
         println!("{:#?}", track);
     }
 }

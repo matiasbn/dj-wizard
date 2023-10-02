@@ -277,7 +277,7 @@ impl QueueCommands {
                 .await
                 .change_context(QueueError)?;
             return track_info
-                .download_track(&mut soundeo_user)
+                .download_track(&mut soundeo_user, true)
                 .await
                 .change_context(QueueError);
         }
@@ -304,10 +304,15 @@ impl QueueCommands {
             format!("{}", available_tracks.len()).cyan()
         );
 
-        for available_id in available_tracks {
+        for (available_id_index, available_id) in available_tracks.clone().into_iter().enumerate() {
+            println!(
+                "Downloading track {} of {}",
+                (available_id_index + 1).to_string().cyan(),
+                available_tracks.len().to_string().cyan()
+            );
             let mut track_info = SoundeoTrack::new(available_id.clone());
             let download_result = track_info
-                .download_track(soundeo_user)
+                .download_track(soundeo_user, false)
                 .await
                 .change_context(QueueError);
             match download_result {
