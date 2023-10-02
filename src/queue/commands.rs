@@ -22,6 +22,7 @@ pub enum QueueCommands {
     AddToQueue,
     ResumeQueue,
     SaveToCollection,
+    DownloadOnlyAvailableTracks,
 }
 
 impl QueueCommands {
@@ -33,6 +34,7 @@ impl QueueCommands {
             QueueCommands::AddToQueue => Self::add_to_queue().await,
             QueueCommands::ResumeQueue => Self::resume_queue().await,
             QueueCommands::SaveToCollection => Self::add_to_available_downloads().await,
+            QueueCommands::DownloadOnlyAvailableTracks => Self::download_available_tracks().await,
         };
     }
 
@@ -267,24 +269,38 @@ impl QueueCommands {
                 .get_info(&soundeo_user, true)
                 .await
                 .change_context(QueueError)?;
-            let download_result = track_info
+            return track_info
                 .download_track(&mut soundeo_user)
                 .await
                 .change_context(QueueError);
-            match download_result {
-                Err(error) => {
-                    return Err(error);
-                }
-                _ => {}
-            }
+        }
+
+        Self::download_available_tracks().await?;
+        Ok(())
+    }
+
+    async fn download_available_tracks() -> QueueResult<()> {
+        let available_tracks: HashSet<String> = DjWizardLog::get_available_tracks()
+            .change_context(QueueError)?
+            .into_iter()
+            .collect();
+        let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(QueueError)?;
+
+        if available_tracks.is_empty() {
+            println!("No available to download tracks",);
+            return Ok(());
         }
 
         println!(
-            "The queue has {} tracks available to download",
-            format!("{}", available_downloads.len()).cyan()
+            "{} available to download tracks",
+            format!("{}", available_tracks.len()).cyan()
         );
 
-        for available_id in available_downloads {
+        for available_id in available_tracks {
             let mut track_info = SoundeoTrack::new(available_id.clone());
             let download_result = track_info
                 .download_track(&mut soundeo_user)
@@ -295,7 +311,13 @@ impl QueueCommands {
                     DjWizardLog::remove_available_track(available_id.clone())
                         .change_context(QueueError)?;
                 }
-                _ => {}
+                Err(error) => {
+                    println!(
+                        "Track with id {} was not downloaded",
+                        available_id.clone().red()
+                    );
+                    println!("Error: {:?}", error)
+                }
             }
         }
         Ok(())
