@@ -217,6 +217,14 @@ impl SoundeoTrack {
         );
     }
 
+    pub fn print_already_available(&self) {
+        println!(
+            "Track {} (ID:{}) is already available for download, skipping",
+            self.title.clone().yellow(),
+            self.id.clone().yellow(),
+        );
+    }
+
     pub fn print_not_downloadable(&self) {
         println!(
             "Track isn't downloadable: {}, {}",
