@@ -171,7 +171,7 @@ impl QueueCommands {
         let Soundeo { tracks_info } = DjWizardLog::get_soundeo().change_context(QueueError)?;
         // let tracks = soundeo
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
-        let mut q_tracks_info: Vec<SoundeoTrack> = queued_tracks
+        let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
             .into_iter()
             .map(|q_track| tracks_info.get(&q_track).unwrap().clone())
             .collect();
@@ -179,7 +179,8 @@ impl QueueCommands {
         for track in q_tracks_info.clone() {
             genres_hash_set.insert(track.genre);
         }
-        let genres = genres_hash_set.into_iter().collect::<Vec<String>>();
+        let mut genres = genres_hash_set.into_iter().collect::<Vec<String>>();
+        genres.sort();
         let selection = Dialoguer::select("Select the genre".to_string(), genres.clone(), None)
             .change_context(QueueError)?;
         let selected_genre = genres[selection].clone();
