@@ -34,6 +34,8 @@ pub type DjWizardLogResult<T> = error_stack::Result<T, DjWizardLogError>;
 pub struct DjWizardLog {
     pub last_update: u64,
     pub queued_tracks: HashSet<String>,
+    #[serde(default)]
+    pub available_tracks: HashSet<String>,
     pub spotify: Spotify,
     pub soundeo: Soundeo,
 }
@@ -42,6 +44,11 @@ impl DjWizardLog {
     pub fn get_queued_tracks() -> DjWizardLogResult<HashSet<String>> {
         let log = Self::read_log()?;
         Ok(log.queued_tracks)
+    }
+
+    pub fn get_available_tracks() -> DjWizardLogResult<HashSet<String>> {
+        let log = Self::read_log()?;
+        Ok(log.available_tracks)
     }
 
     pub fn get_spotify() -> DjWizardLogResult<Spotify> {
@@ -73,6 +80,7 @@ impl DjWizardLog {
                 queued_tracks: HashSet::new(),
                 soundeo: Soundeo::new(),
                 spotify: Spotify::new(),
+                available_tracks: HashSet::new(),
             }
         };
         Ok(soundeo_log)
@@ -94,25 +102,7 @@ impl DjWizardLog {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
     }
 
-    // pub fn mark_track_as_downloaded(track_id: String) -> DjWizardLogResult<()> {
-    //     let mut log = Self::read_log()?;
-    //     log.last_update = SystemTime::now()
-    //         .duration_since(UNIX_EPOCH)
-    //         .into_report()
-    //         .change_context(DjWizardLogError)?
-    //         .as_secs();
-    //     log.soundeo
-    //         .tracks_info
-    //         .get_mut(&track_id)
-    //         .ok_or(DjWizardLogError)
-    //         .into_report()?
-    //         .already_downloaded = true;
-    //     let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
-    //     log.save_log(&soundeo_user)?;
-    //     Ok(())
-    // }
-
-    pub fn enqueue_track_to_log(track_id: String) -> DjWizardLogResult<bool> {
+    pub fn add_queued_track(track_id: String) -> DjWizardLogResult<bool> {
         let mut log = Self::read_log()?;
         log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -123,7 +113,8 @@ impl DjWizardLog {
         log.save_log()?;
         Ok(result)
     }
-    pub fn remove_queued_track_from_log(track_id: String) -> DjWizardLogResult<bool> {
+
+    pub fn remove_queued_track(track_id: String) -> DjWizardLogResult<bool> {
         let mut log = Self::read_log()?;
         log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -131,6 +122,30 @@ impl DjWizardLog {
             .change_context(DjWizardLogError)?
             .as_secs();
         let result = log.queued_tracks.remove(&track_id);
+        log.save_log()?;
+        Ok(result)
+    }
+
+    pub fn add_available_track(track_id: String) -> DjWizardLogResult<bool> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        let result = log.available_tracks.insert(track_id);
+        log.save_log()?;
+        Ok(result)
+    }
+
+    pub fn remove_available_track(track_id: String) -> DjWizardLogResult<bool> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        let result = log.available_tracks.remove(&track_id);
         log.save_log()?;
         Ok(result)
     }

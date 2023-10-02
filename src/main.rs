@@ -145,125 +145,7 @@ impl DjWizardCommands {
                 println!("Current config:\n{:#?}", soundeo_bot_config);
                 Ok(())
             }
-            DjWizardCommands::Queue => {
-                QueueCommands::execute().change_context(DjWizardError).await
-                // let options = vec!["Add to queue", "Resume queue"];
-                // let prompt_text = "What you want to do?".to_string();
-                // let selection =
-                //     Dialoguer::select(prompt_text, options, None).change_context(DjWizardError)?;
-                // if selection == 0 {
-                //     let prompt_text = format!("Soundeo url: ");
-                //     let url = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
-                //     let add_to_collection = Dialoguer::select_yes_or_no(
-                //         "Do you want to add the tracks to your Soundeo collection?".to_string(),
-                //     )
-                //     .change_context(DjWizardError)?;
-                //     let soundeo_url = Url::parse(&url)
-                //         .into_report()
-                //         .change_context(DjWizardError)?;
-                //     let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
-                //     soundeo_user
-                //         .login_and_update_user_info()
-                //         .await
-                //         .change_context(DjWizardError)?;
-                //     let mut track_list = SoundeoTracksList::new(soundeo_url.to_string())
-                //         .change_context(DjWizardError)?;
-                //     track_list
-                //         .get_tracks_id(&soundeo_user)
-                //         .await
-                //         .change_context(DjWizardError)?;
-                //     println!(
-                //         "Queueing {} tracks",
-                //         format!("{}", track_list.track_ids.len()).cyan()
-                //     );
-                //     for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
-                //         println!("-----------------------------------------------------------------------------");
-                //         println!(
-                //             "Queueing track {} of {}",
-                //             track_id_index + 1,
-                //             track_list.track_ids.len()
-                //         );
-                //         let mut track_info = SoundeoTrack::new(track_id.clone());
-                //         track_info
-                //             .get_info(&soundeo_user, true)
-                //             .await
-                //             .change_context(DjWizardError)?;
-                //         if track_info.already_downloaded {
-                //             track_info.print_already_downloaded();
-                //             continue;
-                //         }
-                //
-                //         let queue_result = DjWizardLog::enqueue_track_to_log(track_id.clone())
-                //             .change_context(DjWizardError)?;
-                //         if queue_result {
-                //             println!(
-                //                 "Track with id {} successfully queued",
-                //                 track_id.clone().green(),
-                //             );
-                //             if add_to_collection {
-                //                 println!(
-                //                     "Adding {} to the Soundeo collection",
-                //                     track_info.title.cyan()
-                //                 );
-                //                 let download_url_result =
-                //                     track_info.get_download_url(&mut soundeo_user).await;
-                //                 match download_url_result {
-                //                     Ok(url) => {
-                //                         println!(
-                //                             "Track successfully added to the {}",
-                //                             "Soundeo collection".green()
-                //                         );
-                //                     }
-                //                     Err(err) => {
-                //                         println!(
-                //                             "Error adding track to the collection:\n{:#?}",
-                //                             err
-                //                         );
-                //                     }
-                //                 }
-                //             }
-                //         } else {
-                //             println!(
-                //                 "Track with id {} was previously queued",
-                //                 track_id.clone().yellow(),
-                //             );
-                //         }
-                //     }
-                // } else {
-                //     let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
-                //     soundeo_user
-                //         .login_and_update_user_info()
-                //         .await
-                //         .change_context(DjWizardError)?;
-                //     let queued_tracks =
-                //         DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
-                //     println!(
-                //         "The queue has {} tracks still pending to download",
-                //         format!("{}", queued_tracks.len()).cyan()
-                //     );
-                //     for track_id in queued_tracks {
-                //         let mut track_info = SoundeoTrack::new(track_id.clone());
-                //         let download_result = track_info
-                //             .download_track(&mut soundeo_user)
-                //             .await
-                //             .change_context(DjWizardError);
-                //         match download_result {
-                //             Ok(_) => {
-                //                 DjWizardLog::remove_queued_track_from_log(track_id.clone())
-                //                     .change_context(DjWizardError)?;
-                //             }
-                //             Err(error) => {
-                //                 println!(
-                //                     "Track with id {} was not downloaded",
-                //                     track_id.clone().red()
-                //                 );
-                //                 println!("Error: {:?}", error)
-                //             }
-                //         }
-                //     }
-                // }
-                // Ok(())
-            }
+            DjWizardCommands::Queue => QueueCommands::execute().change_context(DjWizardError).await,
             DjWizardCommands::Url => {
                 let prompt_text = format!("Soundeo url: ");
                 let url = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
@@ -285,7 +167,7 @@ impl DjWizardCommands {
                 for (_, track_id) in track_list.track_ids.into_iter().enumerate() {
                     let mut track = SoundeoTrack::new(track_id);
                     track
-                        .download_track(&mut soundeo_user)
+                        .download_track(&mut soundeo_user, true)
                         .await
                         .change_context(DjWizardError)?;
                 }
