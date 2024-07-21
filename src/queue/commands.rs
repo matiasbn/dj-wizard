@@ -1,6 +1,6 @@
 use clap::builder::Str;
 use colored::Colorize;
-use error_stack::{IntoReport, Report, ResultExt};
+use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -78,6 +78,9 @@ impl QueueCommands {
 
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
 
+        let prompt_text = format!("Do you want to download the already downloded tracks again?");
+        let repeat_download =
+            Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
         for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
             println!(
                 "-----------------------------------------------------------------------------"
@@ -95,8 +98,16 @@ impl QueueCommands {
                 .change_context(QueueError)?;
 
             if track_info.already_downloaded {
-                track_info.print_already_downloaded();
-                continue;
+                if !repeat_download {
+                    track_info.print_already_downloaded();
+                    continue;
+                } else {
+                    track_info.print_downloading_again();
+                    track_info
+                        .reset_already_downloaded(&mut soundeo_user)
+                        .await
+                        .change_context(QueueError)?;
+                }
             }
 
             if let Some(_) = available_tracks.get(track_id) {
@@ -143,6 +154,10 @@ impl QueueCommands {
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
+        let prompt_text = format!("Do you want to download the already downloded tracks again?");
+        let repeat_download =
+            Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
+
         for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
             println!(
                 "-----------------------------------------------------------------------------"
@@ -159,8 +174,16 @@ impl QueueCommands {
                 .change_context(QueueError)?;
 
             if track_info.already_downloaded {
-                track_info.print_already_downloaded();
-                continue;
+                if !repeat_download {
+                    track_info.print_already_downloaded();
+                    continue;
+                } else {
+                    track_info.print_downloading_again();
+                    track_info
+                        .reset_already_downloaded(&mut soundeo_user)
+                        .await
+                        .change_context(QueueError)?;
+                }
             }
 
             if let Some(_) = available_tracks.get(track_id) {

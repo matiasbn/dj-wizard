@@ -135,6 +135,20 @@ impl SoundeoTrack {
         }
     }
 
+    pub async fn reset_already_downloaded(
+        &mut self,
+        soundeo_user: &mut SoundeoUser,
+    ) -> SoundeoResult<()> {
+        // Mark as not downloaded
+        DjWizardLog::reset_track_already_downloaded(self.id.clone())
+            .change_context(SoundeoError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(SoundeoError)?;
+        Ok(())
+    }
+
     pub async fn download_track(
         &mut self,
         soundeo_user: &mut SoundeoUser,
@@ -220,6 +234,14 @@ impl SoundeoTrack {
             "Track already downloaded: {},  {}",
             self.title.clone().yellow(),
             self.get_track_url().yellow()
+        );
+    }
+
+    pub fn print_downloading_again(&self) {
+        println!(
+            "Downloading track again, : {},  {}",
+            self.title.clone().green(),
+            self.get_track_url().green()
         );
     }
 

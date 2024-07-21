@@ -44,4 +44,5 @@ pub trait SoundeoCRUD {
     fn create_soundeo_track(soundeo_track: SoundeoTrack) -> DjWizardLogResult<()>;
 
     fn mark_track_as_downloaded(soundeo_track_id: String) -> DjWizardLogResult<()>;
+    fn reset_track_already_downloaded(soundeo_track_id: String) -> DjWizardLogResult<()>;
 }
