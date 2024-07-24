@@ -14,7 +14,7 @@ use crate::soundeo::track_list::SoundeoTracksList;
 use crate::soundeo::Soundeo;
 use crate::user::SoundeoUser;
 
-use super::{UrlListError, UrlListResult};
+use super::{UrlListCRUD, UrlListError, UrlListResult};
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum UrlListCommands {
@@ -45,6 +45,21 @@ impl UrlListCommands {
     }
 
     async fn add_to_url_list() -> UrlListResult<()> {
+        let prompt_text = format!("Soundeo url: ");
+        let url = Dialoguer::input(prompt_text).change_context(UrlListError)?;
+        let soundeo_url = Url::parse(&url)
+            .into_report()
+            .change_context(UrlListError)?;
+        let successfully_inserted =
+            DjWizardLog::add_url_to_url_list(soundeo_url.clone()).change_context(UrlListError)?;
+        if successfully_inserted {
+            println!(
+                "Url successfully inserted: {}",
+                soundeo_url.clone().as_str().green(),
+            );
+        } else {
+            println!("Url already inserted: {}", soundeo_url.as_str().yellow(),);
+        }
         Ok(())
     }
 
@@ -74,36 +89,5 @@ impl UrlListCommands {
                 .change_context(UrlListError)?;
         }
         Ok(())
-    }
-
-    fn filter_queue() -> UrlListResult<Vec<String>> {
-        let Soundeo { tracks_info } = DjWizardLog::get_soundeo().change_context(UrlListError)?;
-        // let tracks = soundeo
-        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(UrlListError)?;
-        let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
-            .into_iter()
-            .map(|q_track| tracks_info.get(&q_track).unwrap().clone())
-            .collect();
-        let mut genres_hash_set = HashSet::new();
-        for track in q_tracks_info.clone() {
-            genres_hash_set.insert(track.genre);
-        }
-        let mut genres = genres_hash_set.into_iter().collect::<Vec<String>>();
-        genres.sort();
-        let selection = Dialoguer::select("Select the genre".to_string(), genres.clone(), None)
-            .change_context(UrlListError)?;
-        let selected_genre = genres[selection].clone();
-        let selected_tracks = q_tracks_info
-            .clone()
-            .into_iter()
-            .filter_map(|track| {
-                if track.genre == selected_genre {
-                    Some(track.id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<String>>();
-        Ok(selected_tracks)
     }
 }

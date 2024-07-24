@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::url_list::UrlListCRUD;
 use crate::DjWizardError;
 use colored::Colorize;
 use error_stack::{IntoReport, ResultExt};
@@ -36,6 +37,8 @@ pub struct DjWizardLog {
     pub queued_tracks: HashSet<String>,
     #[serde(default)]
     pub available_tracks: HashSet<String>,
+    #[serde(default)]
+    pub url_list: HashSet<String>,
     pub spotify: Spotify,
     pub soundeo: Soundeo,
 }
@@ -81,6 +84,7 @@ impl DjWizardLog {
                 soundeo: Soundeo::new(),
                 spotify: Spotify::new(),
                 available_tracks: HashSet::new(),
+                url_list: HashSet::new(),
             }
         };
         Ok(soundeo_log)
@@ -268,6 +272,20 @@ impl SpotifyCRUD for DjWizardLog {
             .insert(spotify_track_id, soundeo_track_id.clone());
         log.save_log()?;
         Ok(())
+    }
+}
+
+impl UrlListCRUD for DjWizardLog {
+    fn add_url_to_url_list(soundeo_url: url::Url) -> DjWizardLogResult<bool> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        let result = log.url_list.insert(soundeo_url.to_string());
+        log.save_log()?;
+        Ok(result)
     }
 }
 
