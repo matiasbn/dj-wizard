@@ -25,6 +25,7 @@ pub enum QueueCommands {
     ResumeQueue,
     SaveToAvailableTracks,
     DownloadOnlyAvailableTracks,
+    GetQueueInfo,
 }
 
 impl QueueCommands {
@@ -37,6 +38,7 @@ impl QueueCommands {
             QueueCommands::AddToQueueFromUrlList => Self::add_to_queue_from_url_list().await,
             QueueCommands::ResumeQueue => Self::resume_queue().await,
             QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads().await,
+            QueueCommands::GetQueueInfo => Self::get_queue_information(),
             QueueCommands::DownloadOnlyAvailableTracks => {
                 let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
                 soundeo_user
@@ -402,6 +404,37 @@ impl QueueCommands {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn get_queue_information() -> QueueResult<()> {
+        let Soundeo { tracks_info } = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        // let tracks = soundeo
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+        let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
+            .into_iter()
+            .map(|q_track| tracks_info.get(&q_track).unwrap().clone())
+            .collect();
+        let mut genres_hash_set = HashSet::new();
+        for track in q_tracks_info.clone() {
+            genres_hash_set.insert(track.genre);
+        }
+        let mut genres = genres_hash_set.into_iter().collect::<Vec<String>>();
+        genres.sort();
+        for genre in genres {
+            let amount = q_tracks_info
+                .clone()
+                .into_iter()
+                .filter(|track| track.genre == genre)
+                .count();
+            println!("{}: {} tracks", genre.cyan(), amount);
+        }
+        println!(
+            "{}: {} tracks",
+            format!("Total").green(),
+            q_tracks_info.len()
+        );
+
         Ok(())
     }
 
