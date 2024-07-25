@@ -11,6 +11,7 @@ use reqwest::{get, Client};
 use scraper::{ElementRef, Html, Selector};
 use serde_json::json;
 use url::{Host, Position, Url};
+use url_list::commands::UrlListCommands;
 
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
@@ -30,6 +31,7 @@ mod log;
 mod queue;
 mod soundeo;
 mod spotify;
+mod url_list;
 mod user;
 
 #[derive(Debug)]
@@ -147,31 +149,9 @@ impl DjWizardCommands {
             }
             DjWizardCommands::Queue => QueueCommands::execute().change_context(DjWizardError).await,
             DjWizardCommands::Url => {
-                let prompt_text = format!("Soundeo url: ");
-                let url = Dialoguer::input(prompt_text).change_context(DjWizardError)?;
-                let soundeo_url = Url::parse(&url)
-                    .into_report()
-                    .change_context(DjWizardError)?;
-                let mut soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
-                soundeo_user
-                    .login_and_update_user_info()
+                UrlListCommands::execute()
+                    .change_context(DjWizardError)
                     .await
-                    .change_context(DjWizardError)?;
-                let mut track_list = SoundeoTracksList::new(soundeo_url.to_string())
-                    .change_context(DjWizardError)?;
-                track_list
-                    .get_tracks_id(&soundeo_user)
-                    .await
-                    .change_context(DjWizardError)?;
-                // Add all tracks to collection by
-                for (_, track_id) in track_list.track_ids.into_iter().enumerate() {
-                    let mut track = SoundeoTrack::new(track_id);
-                    track
-                        .download_track(&mut soundeo_user, true)
-                        .await
-                        .change_context(DjWizardError)?;
-                }
-                Ok(())
             }
             DjWizardCommands::Clean => {
                 let soundeo_user = SoundeoUser::new().change_context(DjWizardError)?;
