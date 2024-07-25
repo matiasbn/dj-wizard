@@ -239,9 +239,9 @@ impl SoundeoTrack {
 
     pub fn print_downloading_again(&self) {
         println!(
-            "Downloading track again, : {},  {}",
-            self.title.clone().green(),
-            self.get_track_url().green()
+            "Downloading track again: {},  {}",
+            self.title.clone().purple(),
+            self.get_track_url().purple()
         );
     }
 
