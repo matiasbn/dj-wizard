@@ -62,7 +62,11 @@ enum DjWizardCommands {
     /// Reads the current config file
     Config,
     /// Add tracks to a queue or resumes the download from it
-    Queue,
+    Queue {
+        /// flag to repet already downloaded
+        #[clap(long, short, action)]
+        resume_queue: bool,
+    },
     /// Add all the tracks from a url to the Soundeo collection and queue them
     Url,
     /// Clean all the repeated files starting on a path.
@@ -147,7 +151,11 @@ impl DjWizardCommands {
                 println!("Current config:\n{:#?}", soundeo_bot_config);
                 Ok(())
             }
-            DjWizardCommands::Queue => QueueCommands::execute().change_context(DjWizardError).await,
+            DjWizardCommands::Queue { resume_queue } => {
+                QueueCommands::execute(*resume_queue)
+                    .change_context(DjWizardError)
+                    .await
+            }
             DjWizardCommands::Url => {
                 UrlListCommands::execute()
                     .change_context(DjWizardError)
@@ -201,7 +209,7 @@ impl DjWizardCommands {
             DjWizardCommands::Config => {
                 format!("dj-wizard config")
             }
-            DjWizardCommands::Queue => {
+            DjWizardCommands::Queue { .. } => {
                 format!("dj-wizard queue")
             }
             DjWizardCommands::Url => {

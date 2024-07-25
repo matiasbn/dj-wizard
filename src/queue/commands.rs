@@ -29,14 +29,17 @@ pub enum QueueCommands {
 }
 
 impl QueueCommands {
-    pub async fn execute() -> QueueResult<()> {
+    pub async fn execute(resume_queue_flag: bool) -> QueueResult<()> {
+        if resume_queue_flag {
+            return Self::resume_queue(resume_queue_flag).await;
+        }
         let options = Self::get_options();
         let selection = Dialoguer::select("What you want to do?".to_string(), options, None)
             .change_context(QueueError)?;
         return match Self::get_selection(selection) {
             QueueCommands::AddToQueueFromUrl => Self::add_to_queue_from_url(None, None).await,
             QueueCommands::AddToQueueFromUrlList => Self::add_to_queue_from_url_list().await,
-            QueueCommands::ResumeQueue => Self::resume_queue().await,
+            QueueCommands::ResumeQueue => Self::resume_queue(resume_queue_flag).await,
             QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads().await,
             QueueCommands::GetQueueInfo => Self::get_queue_information(),
             QueueCommands::DownloadOnlyAvailableTracks => {
@@ -289,10 +292,15 @@ impl QueueCommands {
         Ok(())
     }
 
-    async fn resume_queue() -> QueueResult<()> {
-        let filtered_by_genre =
+    async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
+        // if the resume queue flag is provided, skip the dialog to filter by genre
+        // since we need complete automation
+        let filtered_by_genre = if resume_queue_flag {
+            false
+        } else {
             Dialoguer::select_yes_or_no("Do you want to filter by genre".to_string())
-                .change_context(QueueError)?;
+                .change_context(QueueError)?
+        };
         let queued_tracks = if filtered_by_genre {
             Self::filter_queue()?
         } else {
