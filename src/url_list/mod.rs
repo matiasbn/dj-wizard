@@ -21,4 +21,5 @@ pub type UrlListResult<T> = error_stack::Result<T, UrlListError>;
 
 pub trait UrlListCRUD {
     fn add_url_to_url_list(soundeo_url: Url) -> DjWizardLogResult<bool>;
+    fn remove_url_from_url_list(soundeo_url: String) -> DjWizardLogResult<bool>;
 }

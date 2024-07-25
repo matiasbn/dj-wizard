@@ -1,9 +1,7 @@
-use clap::builder::Str;
 use colored::Colorize;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -11,7 +9,6 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
-use crate::soundeo::Soundeo;
 use crate::user::SoundeoUser;
 
 use super::{UrlListCRUD, UrlListError, UrlListResult};

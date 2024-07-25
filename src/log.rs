@@ -64,6 +64,11 @@ impl DjWizardLog {
         Ok(log.soundeo)
     }
 
+    pub fn get_url_list() -> DjWizardLogResult<HashSet<String>> {
+        let log = Self::read_log()?;
+        Ok(log.url_list)
+    }
+
     fn read_log() -> DjWizardLogResult<Self> {
         let soundeo_user = SoundeoUser::new().change_context(DjWizardLogError)?;
         let soundeo_log_path = Self::get_log_path(&soundeo_user);
@@ -284,6 +289,18 @@ impl UrlListCRUD for DjWizardLog {
             .change_context(DjWizardLogError)?
             .as_secs();
         let result = log.url_list.insert(soundeo_url.to_string());
+        log.save_log()?;
+        Ok(result)
+    }
+
+    fn remove_url_from_url_list(soundeo_url: String) -> DjWizardLogResult<bool> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        let result = log.url_list.remove(&soundeo_url);
         log.save_log()?;
         Ok(result)
     }

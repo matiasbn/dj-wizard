@@ -15,11 +15,13 @@ use crate::soundeo::track_list::SoundeoTracksList;
 use crate::soundeo::Soundeo;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::SpotifyError;
+use crate::url_list::UrlListCRUD;
 use crate::user::SoundeoUser;
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum QueueCommands {
-    AddToQueue,
+    AddToQueueFromUrl,
+    AddToQueueFromUrlList,
     ResumeQueue,
     SaveToAvailableTracks,
     DownloadOnlyAvailableTracks,
@@ -31,7 +33,8 @@ impl QueueCommands {
         let selection = Dialoguer::select("What you want to do?".to_string(), options, None)
             .change_context(QueueError)?;
         return match Self::get_selection(selection) {
-            QueueCommands::AddToQueue => Self::add_to_queue().await,
+            QueueCommands::AddToQueueFromUrl => Self::add_to_queue_from_url(None, None).await,
+            QueueCommands::AddToQueueFromUrlList => Self::add_to_queue_from_url_list().await,
             QueueCommands::ResumeQueue => Self::resume_queue().await,
             QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads().await,
             QueueCommands::DownloadOnlyAvailableTracks => {
@@ -56,17 +59,67 @@ impl QueueCommands {
         options[selection].clone()
     }
 
-    async fn add_to_queue() -> QueueResult<()> {
-        let prompt_text = format!("Soundeo url: ");
-        let url = Dialoguer::input(prompt_text).change_context(QueueError)?;
-        let soundeo_url = Url::parse(&url).into_report().change_context(QueueError)?;
+    async fn add_to_queue_from_url_list() -> QueueResult<()> {
+        let url_list = DjWizardLog::get_url_list().change_context(QueueError)?;
+        let prompt_text = format!("Do you want to download the already downloded tracks again?");
+        let repeat_download =
+            Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
+
+        for url in url_list {
+            println!("Queueing tracks from: {}", url.cyan());
+            match Self::add_to_queue_from_url(Some(url.clone()), Some(repeat_download)).await {
+                Ok(_) => {
+                    println!("Url successfully queued: {}", url.clone().green());
+                    let removed = DjWizardLog::remove_url_from_url_list(url.clone())
+                        .change_context(QueueError)?;
+                    if !removed {
+                        println!("Url could not be removed from the list: {}", url.red());
+                    }
+                }
+                Err(err) => {
+                    println!(
+                        "Url: {} \n Could not be queued due to: {}",
+                        url.clone().yellow(),
+                        err
+                    );
+                }
+            };
+        }
+        Ok(())
+    }
+
+    async fn add_to_queue_from_url(
+        soundeo_url: Option<String>,
+        repeat_download: Option<bool>,
+    ) -> QueueResult<()> {
+        let soundeo_url_string = match soundeo_url {
+            Some(soundeo_url_string) => soundeo_url_string,
+            None => {
+                let prompt_text = format!("Soundeo url: ");
+                let url = Dialoguer::input(prompt_text).change_context(QueueError)?;
+                let soundeo_url = Url::parse(&url).into_report().change_context(QueueError)?;
+                soundeo_url.to_string()
+            }
+        };
+
+        let repeat_download_result = match repeat_download {
+            Some(repeat_download_bool) => repeat_download_bool,
+            None => {
+                let prompt_text =
+                    format!("Do you want to download the already downloded tracks again?");
+                let repeat_download =
+                    Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
+                repeat_download
+            }
+        };
+
         let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(QueueError)?;
         let mut track_list =
-            SoundeoTracksList::new(soundeo_url.to_string()).change_context(QueueError)?;
+            SoundeoTracksList::new(soundeo_url_string).change_context(QueueError)?;
         track_list
             .get_tracks_id(&soundeo_user)
             .await
@@ -78,9 +131,6 @@ impl QueueCommands {
 
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
 
-        let prompt_text = format!("Do you want to download the already downloded tracks again?");
-        let repeat_download =
-            Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
         for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
             println!(
                 "-----------------------------------------------------------------------------"
@@ -98,7 +148,7 @@ impl QueueCommands {
                 .change_context(QueueError)?;
 
             if track_info.already_downloaded {
-                if !repeat_download {
+                if !repeat_download_result {
                     track_info.print_already_downloaded();
                     continue;
                 } else {
