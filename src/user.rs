@@ -247,34 +247,34 @@ impl SoundeoUser {
         Ok(())
     }
 
-    pub async fn login_and_update_user_info(&mut self) -> SoundeoUserResult<()> {
-        if self.cookie.is_empty() {
-            println!("Login in with {}", self.name.clone().green());
-            self.get_cookie_from_browser().await?;
-        }
+    async fn get_login_response(&self) -> SoundeoUserResult<Response> {
         let client = Client::new();
         let body = format!("_method=POST&data%5BUser%5D%5Blogin%5D={}&data%5BUser%5D%5Bpassword%5D={}&data%5Bremember%5D=1", self.name.replace("@", "%40"), self.pass);
-        let response = client
-            .post("https://soundeo.com/account/logoreg")
-            .body(body)
-            .header("authority","soundeo.com")
-            .header("accept","application/json, text/javascript, */*; q=0.01")
-            .header("accept-language","en-US,en;q=0.9")
-            .header("content-type","application/x-www-form-urlencoded; charset=UTF-8")
-            .header("cookie",self.cookie.clone())
-            .header("origin","https://soundeo.com")
-            .header("referer","https://soundeo.com/")
-            .header("sec-ch-ua",r#"Not.A/Brand";v="8", "Chromium";v="114", "Brave";v="114"#)
-            .header("sec-ch-ua-mobile","?0")
-            .header("sec-ch-ua-platform","macOS")
-            .header("sec-fetch-dest","empty")
-            .header("sec-fetch-mode","cors")
-            .header("sec-fetch-site","same-origin")
-            .header("sec-gpc","1")
-            .header("user-agent","Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-            .header("x-requested-with","XMLHttpRequest")
-            .send()
-            .await.into_report().change_context(SoundeoUserError)?;
+        let response =  client
+                .post("https://soundeo.com/account/logoreg")
+                .body(body)
+                .header("authority","soundeo.com")
+                .header("accept","application/json, text/javascript, */*; q=0.01")
+                .header("accept-language","en-US,en;q=0.9")
+                .header("content-type","application/x-www-form-urlencoded; charset=UTF-8")
+                .header("cookie",self.cookie.clone())
+                .header("origin","https://soundeo.com")
+                .header("referer","https://soundeo.com/")
+                .header("sec-ch-ua",r#"Not.A/Brand";v="8", "Chromium";v="114", "Brave";v="114"#)
+                .header("sec-ch-ua-mobile","?0")
+                .header("sec-ch-ua-platform","macOS")
+                .header("sec-fetch-dest","empty")
+                .header("sec-fetch-mode","cors")
+                .header("sec-fetch-site","same-origin")
+                .header("sec-gpc","1")
+                .header("user-agent","Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+                .header("x-requested-with","XMLHttpRequest")
+                .send()
+                .await.into_report().change_context(SoundeoUserError)?;
+        Ok(response)
+    }
+
+    async fn get_snd_data(&mut self, response: &Response) -> SoundeoUserResult<()> {
         let snd_data = response
             .headers()
             .get_all("set-cookie")
@@ -292,16 +292,39 @@ impl SoundeoUser {
             .change_context(SoundeoUserError)?
             .to_string();
         self.snd_data = snd_data;
-        let response_text = response
-            .text()
-            .await
-            .into_report()
-            .change_context(SoundeoUserError)?;
-        let json_resp: Value = serde_json::from_str(&response_text)
-            .into_report()
-            .change_context(SoundeoUserError)?;
-        let header = json_resp["header"].clone().to_string();
-        self.parse_remaining_downloads_and_wait_time(header)?;
+        Ok(())
+    }
+
+    pub async fn login_and_update_user_info(&mut self) -> SoundeoUserResult<()> {
+        if self.cookie.is_empty() {
+            println!("Login in with {}", self.name.clone().green());
+            self.get_cookie_from_browser().await?;
+        }
+        let mut logged_in = false;
+        while !logged_in {
+            let mut response = self.get_login_response().await;
+            while response.is_err() {
+                println!("Login response failed, retrying");
+                response = self.get_login_response().await;
+            }
+            let response_unwrap = response.unwrap();
+            let mut snd_data_result = self.get_snd_data(&response_unwrap).await;
+            while snd_data_result.is_err() {
+                println!("Login response failed, retrying");
+                snd_data_result = self.get_snd_data(&response_unwrap).await;
+            }
+            let response_2 = response_unwrap.text();
+            let response_text = response_2
+                .await
+                .into_report()
+                .change_context(SoundeoUserError)?;
+            let json_resp: Value = serde_json::from_str(&response_text)
+                .into_report()
+                .change_context(SoundeoUserError)?;
+            let header = json_resp["header"].clone().to_string();
+            self.parse_remaining_downloads_and_wait_time(header)?;
+            logged_in = true;
+        }
         Ok(())
     }
 
