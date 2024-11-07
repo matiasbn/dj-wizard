@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "dj-wizard"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "Inflector",
  "clap",
