@@ -12,6 +12,7 @@ use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::time::{sleep, Duration};
 
 use crate::{DjWizardCommands, Suggestion};
 
@@ -304,13 +305,21 @@ impl SoundeoUser {
         while !logged_in {
             let mut response = self.get_login_response().await;
             while response.is_err() {
-                println!("Login response failed, retrying");
+                println!(
+                    "{}",
+                    colored::Colorize::red("Login response failed, retrying in 5 seconds")
+                );
+                sleep(Duration::from_secs(5)).await;
                 response = self.get_login_response().await;
             }
             let response_unwrap = response.unwrap();
             let mut snd_data_result = self.get_snd_data(&response_unwrap).await;
             while snd_data_result.is_err() {
-                println!("Login response failed, retrying");
+                println!(
+                    "{}",
+                    colored::Colorize::red("Login response failed in snd, retrying in 5 seconds")
+                );
+                sleep(Duration::from_secs(5)).await;
                 snd_data_result = self.get_snd_data(&response_unwrap).await;
             }
             let response_2 = response_unwrap.text();
