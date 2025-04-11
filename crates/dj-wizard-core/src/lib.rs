@@ -1,14 +1,12 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+// crates/dj-wizard-core/src/lib.rs
+pub mod error;
+pub mod user;
+// Add other modules here as you move them
+// pub mod soundeo;
+// pub mod spotify;
+// pub mod log;
+// pub mod cleaner;
+// pub mod ipfs;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Re-export main error types
+pub use error::{CoreError, Result};
