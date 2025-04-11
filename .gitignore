@@ -3,3 +3,6 @@
 /curl_log.json
 config.json
 .idea
+auto.plist
+auto.md
+auto.sh

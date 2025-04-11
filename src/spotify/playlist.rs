@@ -66,6 +66,7 @@ impl SpotifyPlaylist {
                 enable_begin_frame_control: Some(false),
                 new_window: None,
                 background: None,
+                for_tab: None,
             })
             .ok()
             .ok_or(SpotifyError)
