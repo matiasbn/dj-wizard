@@ -1,33 +1,21 @@
-[package]
-name = "dj-wizard"
-version = "0.1.23"
-edition = "2021"
-description = "CLI for DJs"
-license = "MIT OR Apache-2.0"
-documentation = "https://www.github.com/matiasbn/dj-wizard"
-homepage = "https://www.github.com/matiasbn/dj-wizard"
-repository = "https://www.github.com/matiasbn/dj-wizard"
-rust-version = "1.78"
+# dj-wizard/Cargo.toml
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+resolver = "2"
+members = [
+    "crates/dj-wizard-core",
+    "crates/dj-wizard-cli",
+    "src-tauri",
+]
 
-[dependencies]
-clap = { version = "4.3.10", features = ["derive"] }
-lazy-regex = "2.5.0"
-reqwest = { version = "0.11.18", features = ["stream", "blocking", "multipart"] }
-scraper = "0.17.1"
-serde_json = "1.0.99"
-futures-util = "0.3.14"
-tokio = { version = "1.13.0", features = ["full"] }
-url = "2.4.0"
-error-stack = "0.3.1"
-colorize = "0.1.0"
-serde = { version = "1.0.153", features = ["derive"] }
-indicatif = "0.17.5"
-headless_chrome = "1.0.5"
-dialoguer = "0.10.4"
-colored = "2.0.0"
-native-dialog = "0.6.4"
-strum_macros = "0.25.1"
-strum = "0.25.0"
-Inflector = "0.11.4"
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "cookies", "stream"] }
+error-stack = "0.4"
+log = "0.4"
+url = "2.5"
+colored = "2.1"
+scraper = "0.19"
+headless_chrome = "1.0"
