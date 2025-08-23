@@ -691,7 +691,6 @@ impl SpotifyCommands {
         for (playlist, num_to_queue) in playlists_with_track_counts {
             println!("\nProcessing playlist: {}", playlist.name.yellow());
 
-            // Refetch log to get the most up-to-date pairings
             let current_spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
             let all_unpaired_tracks: Vec<_> = playlist
@@ -705,25 +704,26 @@ impl SpotifyCommands {
                 .cloned()
                 .collect();
 
-            let tracks_to_process: Vec<_> =
-                all_unpaired_tracks.into_iter().take(num_to_queue).collect();
-            let process_len = tracks_to_process.len();
-
-            if process_len == 0 {
+            if all_unpaired_tracks.is_empty() {
                 println!("  └─ No unpaired tracks found to process in this playlist. Skipping.");
                 continue;
             }
 
             println!(
-                "  Attempting to auto-pair and queue {} tracks...",
-                process_len
+                "  Attempting to pair and queue up to {} tracks from a pool of {} unpaired tracks...",
+                num_to_queue.to_string().cyan(),
+                all_unpaired_tracks.len().to_string().cyan()
             );
 
-            for (i, mut spotify_track) in tracks_to_process.into_iter().enumerate() {
+            let mut queued_for_this_playlist = 0;
+            let mut processed_count = 0;
+
+            for mut spotify_track in all_unpaired_tracks {
+                processed_count += 1;
                 println!(
                     "    ({}/{}) Processing: {} by {}",
-                    i + 1,
-                    process_len,
+                    processed_count,
+                    playlist.tracks.len(),
                     spotify_track.title.cyan(),
                     spotify_track.artists.cyan()
                 );
@@ -749,6 +749,7 @@ impl SpotifyCommands {
                             format!("{:?}", selected_priority).cyan()
                         );
                         total_queued += 1;
+                        queued_for_this_playlist += 1;
                     } else {
                         println!("        └─ Already in download queue.");
                     }
@@ -758,6 +759,14 @@ impl SpotifyCommands {
                         "✖".red()
                     );
                     total_failed += 1;
+                }
+
+                if queued_for_this_playlist >= num_to_queue {
+                    println!(
+                        "  └─ Reached the target of {} queued tracks for this playlist. Moving to the next.",
+                        num_to_queue.to_string().green()
+                    );
+                    break;
                 }
             }
         }
@@ -777,19 +786,11 @@ impl SpotifyCommands {
         }
 
         if total_queued > 0 {
-            let start_download = Dialoguer::confirm(
-                "Do you want to start downloading the queue now?".to_string(),
-                Some(true),
-            )
-            .change_context(SpotifyError)?;
-
-            if start_download {
-                println!("\nStarting download process...");
-                QueueCommands::resume_queue(true)
-                    .await
-                    .change_context(SpotifyError)
-                    .attach_printable("Failed to start the download queue.")?;
-            }
+            println!("\nStarting download process automatically...");
+            QueueCommands::resume_queue(true)
+                .await
+                .change_context(SpotifyError)
+                .attach_printable("Failed to start the download queue.")?;
         }
 
         Ok(())
