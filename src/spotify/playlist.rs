@@ -225,12 +225,13 @@ impl SpotifyPlaylist {
     }
 
     pub fn prompt_select_playlist(prompt_text: &str) -> SpotifyResult<Self> {
-        let mut spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let playlist_names = spotify
+        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let mut playlist_names = spotify
             .playlists
             .values()
             .map(|playlist| playlist.name.clone())
             .collect::<Vec<_>>();
+        playlist_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
         let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
             .change_context(SpotifyError)?;
         let playlist = spotify.get_playlist_by_name(playlist_names[selection].clone())?;
