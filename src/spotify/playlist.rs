@@ -1,21 +1,27 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
+use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
-// use colorize::AnsiColor; // Remove or comment out this import to avoid ambiguity
-use error_stack::{FutureExt, IntoReport, Report, ResultExt};
-use headless_chrome::protocol::cdp::Target::CreateTarget;
-use headless_chrome::types::Bounds;
-use headless_chrome::util::Timeout;
-use headless_chrome::{Browser, LaunchOptions};
-use scraper::Selector;
+use dotenvy::dotenv;
+use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::spotify::track::SpotifyTrack;
 use crate::spotify::{SpotifyError, SpotifyResult};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct TokenResponse {
+    access_token: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiArtist {
+    name: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyPlaylist {
@@ -23,6 +29,30 @@ pub struct SpotifyPlaylist {
     pub spotify_playlist_id: String,
     pub url: String,
     pub tracks: HashMap<String, SpotifyTrack>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiTrack {
+    id: Option<String>,
+    name: String,
+    artists: Vec<ApiArtist>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PlaylistItem {
+    track: Option<ApiTrack>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PlaylistTracks {
+    items: Vec<PlaylistItem>,
+    next: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiPlaylist {
+    name: String,
+    tracks: PlaylistTracks,
 }
 
 impl SpotifyPlaylist {
@@ -46,84 +76,118 @@ impl SpotifyPlaylist {
         })
     }
 
+    /// Fetches playlist information (name and tracks) from the Spotify API.
+    ///
+    /// This function requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to be set
+    /// in a `.env` file in the project root. It uses the Client Credentials Flow to
+    /// authenticate with the Spotify API.
     pub async fn get_playlist_info(&mut self) -> SpotifyResult<()> {
-        let launch_options = LaunchOptions {
-            idle_browser_timeout: Duration::from_secs(30000),
-            ..Default::default()
-        };
-        let browser = Browser::new(launch_options)
-            .ok()
-            .ok_or(SpotifyError)
+        println!("Getting playlist info from Spotify API...");
+        dotenv().ok();
+
+        let client_id = env::var("SPOTIFY_CLIENT_ID")
+            .into_report()
+            .change_context(SpotifyError)
+            .attach_printable("SPOTIFY_CLIENT_ID environment variable not set. Please create a .env file with the credentials.")?;
+        let client_secret = env::var("SPOTIFY_CLIENT_SECRET")
+            .into_report()
+            .change_context(SpotifyError)
+            .attach_printable("SPOTIFY_CLIENT_SECRET environment variable not set. Please create a .env file with the credentials.")?;
+
+        // --- Get Access Token ---
+        let client = reqwest::Client::new();
+        let auth_string = format!("{}:{}", client_id, client_secret);
+        let encoded_auth = general_purpose::STANDARD.encode(auth_string);
+
+        let token_response = client
+            .post("https://accounts.spotify.com/api/token")
+            .header("Authorization", format!("Basic {}", encoded_auth))
+            .form(&[("grant_type", "client_credentials")])
+            .send()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?
+            .json::<TokenResponse>()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?;
+        let access_token = token_response.access_token;
+
+        // --- Get Playlist Info (first page) ---
+        let playlist_url = format!(
+            "https://api.spotify.com/v1/playlists/{}",
+            self.spotify_playlist_id
+        );
+
+        let mut api_playlist: ApiPlaylist = client
+            .get(&playlist_url)
+            .bearer_auth(&access_token)
+            .send()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?
+            .json::<ApiPlaylist>()
+            .await
             .into_report()
             .change_context(SpotifyError)?;
 
-        let tab = browser
-            .new_tab_with_options(CreateTarget {
-                url: self.url.clone(),
-                width: Some(2000),
-                height: Some(9999),
-                browser_context_id: None,
-                enable_begin_frame_control: Some(false),
-                new_window: Some(true),
-                background: None,
-                for_tab: None,
-            })
-            .ok()
-            .ok_or(SpotifyError)
-            .into_report()
-            .change_context(SpotifyError)?;
+        self.name = api_playlist.name;
+        println!("The playlist name is {}", self.name.clone().green());
 
-        println!("Loading the playlist...");
-        std::thread::sleep(std::time::Duration::from_secs(20));
+        // --- Process tracks and handle pagination ---
+        self.tracks.clear();
+        let mut next_url = api_playlist.tracks.next.take();
 
-        println!("Getting the playlist name...");
-        let name_element = tab
-            .find_element("h1.Type__TypeElement-sc-goli3j-0.dYGhLW")
-            .unwrap();
+        self.process_track_items(api_playlist.tracks.items);
 
-        let name = name_element.get_inner_text().unwrap();
+        while let Some(url) = next_url {
+            let paginated_response: PlaylistTracks = client
+                .get(&url)
+                .bearer_auth(&access_token)
+                .send()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?
+                .json::<PlaylistTracks>()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
 
-        println!("The playlist name is {}", name.clone());
-        self.name = name;
-
-        println!("Getting the playlist tracks...");
-        let tracks = tab
-            .find_elements("div.h4HgbO_Uu1JYg5UGANeQ.wTUruPetkKdWAR1dd6w4")
-            .unwrap();
-        let title_selector = "div.Type__TypeElement-sc-goli3j-0.fZDcWX.t_yrXoUO3qGsJS4Y6iXX.standalone-ellipsis-one-line";
-        let artists_selector = "span.Type__TypeElement-sc-goli3j-0.bDHxRN.rq2VQ5mb9SDAFWbBIUIn.standalone-ellipsis-one-line";
-        let track_id_selector = "a.t_yrXoUO3qGsJS4Y6iXX";
-        for element in tracks {
-            let title = element
-                .find_element(title_selector)
-                .unwrap()
-                .get_inner_text()
-                .unwrap();
-            let spotify_track_id = element
-                .find_element(track_id_selector)
-                .unwrap()
-                .get_attributes()
-                .unwrap()
-                .unwrap()[7]
-                .clone()
-                .trim_start_matches("/track/")
-                .to_string();
-            let artists = element
-                .find_element(artists_selector)
-                .unwrap()
-                .get_inner_text()
-                .unwrap();
-            self.tracks.insert(
-                spotify_track_id.clone(),
-                SpotifyTrack::new(title.clone(), artists.clone(), spotify_track_id.clone()),
-            );
-            println!(
-                "Adding {} by {} to the playlist data",
-                title.clone(),
-                artists.clone().cyan()
-            );
+            self.process_track_items(paginated_response.items);
+            next_url = paginated_response.next;
         }
+
         Ok(())
+    }
+
+    fn process_track_items(&mut self, items: Vec<PlaylistItem>) {
+        for item in items {
+            if let Some(track) = item.track {
+                if let Some(track_id) = track.id {
+                    let artists: Vec<String> =
+                        track.artists.iter().map(|a| a.name.clone()).collect();
+                    let artists_string = artists.join(", ");
+
+                    let spotify_track = SpotifyTrack::new(
+                        track.name.clone(),
+                        artists_string.clone(),
+                        track_id.clone(),
+                    );
+
+                    self.tracks.insert(track_id, spotify_track);
+                    println!(
+                        "Adding {} by {} to the playlist data",
+                        track.name.yellow(),
+                        artists_string.cyan()
+                    );
+                } else {
+                    println!(
+                        "Skipping track '{}' because it has no ID (it might be a local file).",
+                        track.name.yellow()
+                    );
+                }
+            }
+        }
     }
 
     pub fn prompt_select_playlist(prompt_text: &str) -> SpotifyResult<Self> {
@@ -143,104 +207,18 @@ impl SpotifyPlaylist {
 #[cfg(test)]
 mod tests {
     use crate::spotify::playlist::SpotifyPlaylist;
-    use std::env;
-
-    use colored::Colorize;
     use dotenvy::dotenv;
-    use serde::Deserialize;
 
     use super::*;
 
     #[tokio::test]
+    #[ignore] // Requires .env credentials and network access. Run with `cargo test -- --ignored`
     async fn test_get_playlist() {
+        dotenv().ok();
         let playlist_url = "https://open.spotify.com/playlist/6YYCPN91F4xI1Z17Hzn7ir".to_string();
         let mut playlist = SpotifyPlaylist::new(playlist_url).unwrap();
         playlist.get_playlist_info().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore] // Se ignora para no fallar en CI si no hay credenciales. Ejecutar con: cargo test -- --ignored
-    async fn test_get_playlist_from_api() {
-        // --- PASO 1: Cargar las credenciales desde .env ---
-        // Carga las variables del archivo .env en el directorio raíz del proyecto.
-        dotenv().ok();
-
-        let client_id = env::var("SPOTIFY_CLIENT_ID").expect(
-            "La variable de entorno SPOTIFY_CLIENT_ID no está definida. Asegúrate de tener un archivo .env con las credenciales.",
-        );
-        let client_secret = env::var("SPOTIFY_CLIENT_SECRET").expect(
-            "La variable de entorno SPOTIFY_CLIENT_SECRET no está definida. Asegúrate de tener un archivo .env con las credenciales.",
-        );
-        let playlist_id = "0HUmClXaFGvEIi1rPvfqxg"; // Playlist de ejemplo de tu archivo
-
-        // Verifica que las credenciales no sean los placeholders
-        if client_id == "TU_CLIENT_ID" || client_secret == "TU_CLIENT_SECRET" {
-            println!("\n{}", colored::Colorize::yellow("ATENCIÓN:"));
-            println!("Por favor, reemplaza los valores en tu archivo .env con tus credenciales reales de la API de Spotify.");
-            println!("Puedes obtenerlas en: https://developer.spotify.com/dashboard\n");
-            // La prueba se saltará si las credenciales son las de placeholder
-            return;
-        }
-
-        // --- PASO 2: Obtener el Token de Acceso (Client Credentials Flow) ---
-        #[derive(Deserialize, Debug)]
-        struct TokenResponse {
-            access_token: String,
-        }
-
-        let client = reqwest::Client::new();
-        let auth_string = format!("{}:{}", client_id, client_secret);
-        let encoded_auth = base64::encode(auth_string);
-
-        let token_response = client
-            .post("https://accounts.spotify.com/api/token")
-            .header("Authorization", format!("Basic {}", encoded_auth))
-            .form(&[("grant_type", "client_credentials")])
-            .send()
-            .await
-            .expect("Fallo al solicitar el token de acceso")
-            .json::<TokenResponse>()
-            .await
-            .expect("Fallo al parsear la respuesta del token");
-
-        let access_token = token_response.access_token;
-        println!("Token de acceso obtenido con éxito!");
-
-        // --- PASO 3: Obtener las canciones de la playlist ---
-        let tracks_url = format!(
-            "https://api.spotify.com/v1/playlists/{}/tracks",
-            playlist_id
-        );
-
-        let response_text = client
-            .get(&tracks_url)
-            .bearer_auth(&access_token)
-            .send()
-            .await
-            .expect("Fallo al obtener las canciones de la playlist")
-            .text()
-            .await
-            .expect("Fallo al leer la respuesta de las canciones");
-
-        // --- PASO 4: Imprimir los resultados ---
-        let v: serde_json::Value =
-            serde_json::from_str(&response_text).expect("Fallo al parsear el JSON");
-        println!("\n--- Canciones en la Playlist '{}' ---", playlist_id);
-        if let Some(items) = v["items"].as_array() {
-            for item in items {
-                if let Some(track) = item.get("track") {
-                    if !track.is_null() {
-                        let track_name = track["name"].as_str().unwrap_or("N/A");
-                        let artists: Vec<String> = track["artists"]
-                            .as_array()
-                            .unwrap_or(&vec![])
-                            .iter()
-                            .map(|a| a["name"].as_str().unwrap_or("N/A").to_string())
-                            .collect();
-                        println!("- {} por {}", track_name, artists.join(", ").cyan());
-                    }
-                }
-            }
-        }
+        assert!(!playlist.tracks.is_empty());
+        assert!(!playlist.name.is_empty());
     }
 }
