@@ -10,6 +10,7 @@ use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::spotify::track::AutoPairResult;
 use crate::spotify::track::SpotifyTrack;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::{SoundeoUser, User};
@@ -255,23 +256,31 @@ impl SpotifyPlaylist {
 
         if auto_pair_single_only {
             println!("Starting auto-pairing for single-match tracks...");
-            for (spotify_track_id, mut spotify_track) in unpaired_tracks.into_iter() {
-                let soundeo_track_id = spotify_track
+            let mut paired_count = 0;
+            for (spotify_track_id, mut spotify_track) in unpaired_tracks {
+                let result = spotify_track
                     .find_single_soundeo_match(soundeo_user)
                     .await?;
 
-                if let Some(id) = &soundeo_track_id {
+                if let AutoPairResult::Paired(soundeo_id) = result {
+                    paired_count += 1;
                     println!(
-                        "  -> Automatically paired '{}'",
-                        spotify_track.title.green()
+                        "  ({count}) Paired '{title}' by '{artists}' automatically.",
+                        count = paired_count.to_string().cyan(),
+                        title = spotify_track.title.green(),
+                        artists = spotify_track.artists.yellow()
                     );
                     DjWizardLog::update_spotify_to_soundeo_track(
                         spotify_track_id,
-                        Some(id.clone()),
+                        Some(soundeo_id),
                     )
                     .change_context(SpotifyError)?;
                 }
             }
+            println!(
+                "\nPairing complete. Automatically paired {} new tracks.",
+                paired_count.to_string().green()
+            );
         } else {
             println!("Starting manual pairing process...");
             let unpaired_len = unpaired_tracks.len();

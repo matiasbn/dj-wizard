@@ -1,6 +1,6 @@
 use colored::Colorize;
 use colorize::AnsiColor;
-use error_stack::{Report, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 
 use crate::dialoguer::Dialoguer;
@@ -8,6 +8,13 @@ use crate::soundeo::search_bar::{SoundeoSearchBar, SoundeoSearchBarResult};
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
+
+// Enum to provide detailed results from the auto-pairing attempt.
+pub enum AutoPairResult {
+    Paired(String), // Contains the Soundeo track ID
+    NoMatch,
+    MultipleMatches,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyTrack {
@@ -28,33 +35,18 @@ impl SpotifyTrack {
     pub async fn find_single_soundeo_match(
         &mut self,
         soundeo_user: &SoundeoUser,
-    ) -> SpotifyResult<Option<String>> {
+    ) -> SpotifyResult<AutoPairResult> {
         let downloadable_tracks = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
 
         if downloadable_tracks.len() == 1 {
             // Exactly one match, perfect for auto-pairing.
             let (search_result, track_info) = &downloadable_tracks[0];
-            println!(
-                "  Found single match for '{}': {}",
-                self.title.clone().cyan(),
-                track_info.title.clone().green()
-            );
-            Ok(Some(search_result.value.clone()))
+            Ok(AutoPairResult::Paired(search_result.value.clone()))
+        } else if downloadable_tracks.is_empty() {
+            Ok(AutoPairResult::NoMatch)
         } else {
-            // Zero or more than one match, skip for now.
-            if downloadable_tracks.is_empty() {
-                println!(
-                    "  Skipping '{}': No downloadable matches found.",
-                    self.title.clone().yellow()
-                );
-            } else {
-                println!(
-                    "  Skipping '{}': Found {} matches, requires manual selection.",
-                    self.title.clone().yellow(),
-                    downloadable_tracks.len()
-                );
-            }
-            Ok(None)
+            // Zero or more than one match, requires manual intervention.
+            Ok(AutoPairResult::MultipleMatches)
         }
     }
 
