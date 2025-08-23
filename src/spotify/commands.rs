@@ -528,13 +528,19 @@ impl SpotifyCommands {
         // 4. Process each selected playlist and print the count
         for index in selections {
             let selected_playlist = &local_playlists[index];
-            let count = selected_playlist
-                .tracks
-                .keys()
-                .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
-                .filter_map(|soundeo_id_opt| soundeo_id_opt.as_ref())
-                .filter(|soundeo_id| queued_soundeo_ids.contains(*soundeo_id))
-                .count();
+            let mut count = 0;
+            // Iterate over each track in the selected Spotify playlist
+            for spotify_track_id in selected_playlist.tracks.keys() {
+                // Check if this Spotify track has a Soundeo track paired with it
+                if let Some(Some(soundeo_track_id)) =
+                    spotify_log.soundeo_track_ids.get(spotify_track_id)
+                {
+                    // If it's paired, check if that Soundeo track ID is in our set of queued tracks
+                    if queued_soundeo_ids.contains(soundeo_track_id) {
+                        count += 1;
+                    }
+                }
+            }
 
             println!(
                 "Playlist '{}': {} of {} tracks are in the queue.",

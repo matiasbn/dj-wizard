@@ -511,9 +511,9 @@ impl QueueCommands {
 
     async fn manage_queue() -> QueueResult<()> {
         let options = vec![
+            "Prioritize by Spotify Playlist",
             "Prioritize by Genre",
             "Prioritize by Artist",
-            "Prioritize by Spotify Playlist",
         ];
         let selection = Dialoguer::select(
             "How do you want to manage the queue?".to_string(),
@@ -523,9 +523,9 @@ impl QueueCommands {
         .change_context(QueueError)?;
 
         match selection {
-            0 => Self::prioritize_by_genre().await?,
-            1 => Self::prioritize_by_artist().await?,
-            2 => Self::prioritize_by_spotify_playlist().await?,
+            0 => Self::prioritize_by_spotify_playlist().await?,
+            1 => Self::prioritize_by_genre().await?,
+            2 => Self::prioritize_by_artist().await?,
             _ => unreachable!(),
         }
         Ok(())
@@ -707,14 +707,16 @@ impl QueueCommands {
         let queued_track_ids: HashSet<String> =
             queued_tracks.iter().map(|t| t.track_id.clone()).collect();
 
-        let track_ids_to_promote: Vec<String> = playlist
-            .tracks
-            .keys() // These are spotify_track_ids
-            .filter_map(|spotify_id| final_spotify_log.soundeo_track_ids.get(spotify_id))
-            .filter_map(|soundeo_id_option| soundeo_id_option.as_ref())
-            .filter(|soundeo_id| queued_track_ids.contains(*soundeo_id))
-            .cloned()
-            .collect();
+        let mut track_ids_to_promote: Vec<String> = Vec::new();
+        for spotify_track_id in playlist.tracks.keys() {
+            if let Some(Some(soundeo_track_id)) =
+                final_spotify_log.soundeo_track_ids.get(spotify_track_id)
+            {
+                if queued_track_ids.contains(soundeo_track_id) {
+                    track_ids_to_promote.push(soundeo_track_id.clone());
+                }
+            }
+        }
 
         if track_ids_to_promote.is_empty() {
             println!(
