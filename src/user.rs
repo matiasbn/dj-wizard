@@ -40,6 +40,8 @@ pub struct User {
     pub soundeo_pass: String,
     pub download_path: String,
     pub ipfs: IPFSConfig,
+    pub spotify_access_token: String,
+    pub spotify_refresh_token: String,
 }
 
 impl User {
@@ -53,6 +55,8 @@ impl User {
                 api_key_secret: "".to_string(),
                 last_ipfs_hash: "".to_string(),
             },
+            spotify_access_token: "".to_string(),
+            spotify_refresh_token: "".to_string(),
         }
     }
 

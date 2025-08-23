@@ -1,17 +1,21 @@
+use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
-use colorize::AnsiColor;
 use error_stack::{IntoReport, Report, ResultExt};
 use inflector::Inflector;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use strum::IntoEnumIterator;
+use tiny_http::{Response, Server};
 use url::Url;
+use webbrowser;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
-use crate::user::SoundeoUser;
+use crate::user::{SoundeoUser, User};
 use crate::{DjWizardCommands, Suggestion};
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
@@ -25,12 +29,35 @@ pub enum SpotifyCommands {
 
 impl SpotifyCommands {
     pub async fn execute() -> SpotifyResult<()> {
+        let mut user_config = User::new();
+        user_config
+            .read_config_file()
+            .change_context(SpotifyError)?;
+
+        if user_config.spotify_access_token.is_empty() {
+            let wants_to_login = Dialoguer::confirm(
+                "You are not logged into Spotify. Would you like to log in now?".to_string(),
+                Some(true),
+            )
+            .change_context(SpotifyError)?;
+
+            if wants_to_login {
+                Self::perform_spotify_login(&mut user_config).await?;
+            } else {
+                println!(
+                    "{}",
+                    "Spotify commands cannot be used without logging in.".yellow()
+                );
+                return Ok(());
+            }
+        }
+
         let options = Self::get_options();
         let selection =
             Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
         return match Self::get_selection(selection) {
-            SpotifyCommands::AddNewPlaylist => Self::add_new_playlist().await,
-            SpotifyCommands::UpdatePlaylist => Self::update_playlist().await,
+            SpotifyCommands::AddNewPlaylist => Self::add_new_playlist(&user_config).await,
+            SpotifyCommands::UpdatePlaylist => Self::update_playlist(&user_config).await,
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
@@ -49,7 +76,7 @@ impl SpotifyCommands {
         options[selection].clone()
     }
 
-    async fn add_new_playlist() -> SpotifyResult<()> {
+    async fn add_new_playlist(user_config: &User) -> SpotifyResult<()> {
         let prompt_text = format!("Spotify playlist url: ");
         let url = Dialoguer::input(prompt_text).change_context(SpotifyError)?;
         let playlist_url = Url::parse(&url)
@@ -77,7 +104,7 @@ impl SpotifyCommands {
             }
             None => {
                 playlist
-                    .get_playlist_info()
+                    .get_playlist_info(&user_config.spotify_access_token)
                     .await
                     .change_context(SpotifyError)?;
                 DjWizardLog::create_spotify_playlist(playlist.clone())
@@ -91,11 +118,11 @@ impl SpotifyCommands {
         };
     }
 
-    async fn update_playlist() -> SpotifyResult<()> {
+    async fn update_playlist(user_config: &User) -> SpotifyResult<()> {
         let mut playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         playlist
-            .get_playlist_info()
+            .get_playlist_info(&user_config.spotify_access_token)
             .await
             .change_context(SpotifyError)?;
         DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
@@ -182,6 +209,126 @@ impl SpotifyCommands {
         let prompt_text = "Select the playlist to create the m3u8 file";
         let playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
         let mut file_content = "#EXTM3U";
+
+        Ok(())
+    }
+
+    async fn perform_spotify_login(user: &mut User) -> SpotifyResult<()> {
+        // --- PKCE Step 1: Create a Code Verifier and Code Challenge ---
+        let mut verifier_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut verifier_bytes);
+        let code_verifier =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&verifier_bytes);
+
+        let mut hasher = Sha256::new();
+        hasher.update(code_verifier.as_bytes());
+        let challenge_bytes = hasher.finalize();
+        let code_challenge =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge_bytes);
+
+        // --- Standard Auth Flow Steps ---
+        let client_id = "a57ab1ceee1f4094b55924d3e228ae53".to_string();
+        let redirect_uri = "http://localhost:8888/callback";
+        let scopes = "playlist-read-private playlist-read-collaborative";
+
+        // 2. Start a temporary local server to catch the redirect
+        let server = Server::http("127.0.0.1:8888")
+            .into_report()
+            .change_context(SpotifyError)?;
+
+        // 3. Construct the authorization URL and open it in the browser
+        let auth_url = format!(
+            "https://accounts.spotify.com/authorize?response_type=code&client_id={}&scope={}&redirect_uri={}&code_challenge_method=S256&code_challenge={}",
+            client_id,
+            scopes.replace(' ', "%20"),
+            redirect_uri,
+            code_challenge
+        );
+
+        println!(
+            "\n{}\n",
+            "Please log in to Spotify in the browser window that just opened.".yellow()
+        );
+        if webbrowser::open(&auth_url).is_err() {
+            println!(
+                "Could not automatically open browser. Please copy/paste this URL:\n{}",
+                auth_url.cyan()
+            );
+        }
+
+        // 4. Wait for the user to log in and for Spotify to redirect back to our server
+        let request = server.recv().into_report().change_context(SpotifyError)?;
+        let full_url = format!("http://localhost:8888{}", request.url());
+        let parsed_url = Url::parse(&full_url)
+            .into_report()
+            .change_context(SpotifyError)?;
+        let auth_code = parsed_url
+            .query_pairs()
+            .find_map(|(key, value)| {
+                if key == "code" {
+                    Some(value.into_owned())
+                } else {
+                    None
+                }
+            })
+            .ok_or(
+                Report::new(SpotifyError).attach_printable("Could not find 'code' in callback URL"),
+            )?;
+
+        let response = Response::from_string(
+            "<h1>Authentication successful!</h1><p>You can close this browser tab now.</p>",
+        );
+        request
+            .respond(response)
+            .into_report()
+            .change_context(SpotifyError)?;
+        println!("\nAuthorization code received successfully!");
+
+        // 5. Exchange the code for a token
+        let client = reqwest::Client::new();
+        let params = [
+            ("grant_type", "authorization_code".to_string()),
+            ("code", auth_code),
+            ("redirect_uri", redirect_uri.to_string()),
+            ("client_id", client_id),
+            ("code_verifier", code_verifier),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://accounts.spotify.com/api/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?
+            .json()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?;
+
+        // 6. Store the credentials in the user config
+        user.spotify_access_token = token_response["access_token"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        user.spotify_refresh_token = token_response["refresh_token"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if user.spotify_access_token.is_empty() {
+            return Err(Report::new(SpotifyError).attach_printable(format!(
+                "Failed to get access token. Response: {:?}",
+                token_response
+            )));
+        }
+
+        user.save_config_file().change_context(SpotifyError)?;
+
+        println!(
+            "{}",
+            "Spotify login successful! Your credentials have been saved.".green()
+        );
 
         Ok(())
     }
