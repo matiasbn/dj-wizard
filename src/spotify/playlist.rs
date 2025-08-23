@@ -247,14 +247,14 @@ impl SpotifyPlaylist {
             self.name.yellow()
         );
 
-        for (i, (spotify_track_id, mut spotify_track)) in
-            unpaired_tracks.clone().into_iter().enumerate()
-        {
+        let unpaired_len = unpaired_tracks.len();
+        for (i, (spotify_track_id, mut spotify_track)) in unpaired_tracks.into_iter().enumerate() {
             println!(
-                "Pairing track {}/{}: {}",
+                "Pairing track {}/{}: {} by {}",
                 i + 1,
-                unpaired_tracks.len(),
-                spotify_track.title.cyan()
+                unpaired_len,
+                spotify_track.title.cyan(),
+                spotify_track.artists.yellow()
             );
             let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
             DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_track_id)
