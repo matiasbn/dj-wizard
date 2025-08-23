@@ -359,6 +359,20 @@ impl DjWizardLog {
         );
         Ok(())
     }
+
+    pub fn update_spotify_soundeo_pairs(
+        new_pairs: &HashMap<String, Option<String>>,
+    ) -> DjWizardLogResult<()> {
+        if new_pairs.is_empty() {
+            return Ok(());
+        }
+        let mut log = Self::read_log()?;
+        log.spotify
+            .soundeo_track_ids
+            .extend(new_pairs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        log.save_log()?;
+        Ok(())
+    }
 }
 
 impl SoundeoCRUD for DjWizardLog {
@@ -407,11 +421,12 @@ impl SoundeoCRUD for DjWizardLog {
 }
 
 impl SpotifyCRUD for DjWizardLog {
-    fn create_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()> {
+    fn update_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()> {
         let mut log = Self::read_log()?;
+        // Using insert will either add a new playlist or update an existing one.
         log.spotify.playlists.insert(
             spotify_playlist.spotify_playlist_id.clone(),
-            spotify_playlist.clone(),
+            spotify_playlist,
         );
         log.save_log()?;
         Ok(())

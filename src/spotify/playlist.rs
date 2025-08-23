@@ -3,6 +3,7 @@ use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
+use crate::Suggestion;
 use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
 use dotenvy::dotenv;
@@ -235,7 +236,7 @@ impl SpotifyPlaylist {
             .tracks
             .iter()
             .filter(|(id, _)| !spotify_log.soundeo_track_ids.contains_key(*id))
-            .map(|(id, track)| (id.clone(), track.clone())) // Clone to avoid borrowing issues
+            .map(|(id, track)| (id.clone(), track.clone()))
             .collect();
 
         if unpaired_tracks.is_empty() {
@@ -311,6 +312,14 @@ impl SpotifyPlaylist {
             .values()
             .map(|playlist| playlist.name.clone())
             .collect::<Vec<_>>();
+        if playlist_names.is_empty() {
+            return Err(Report::new(SpotifyError)
+                .attach_printable("No Spotify playlists have been added to the log yet.")
+                .attach(Suggestion(
+                    "Please add a playlist first using the 'Add new playlist from url' option."
+                        .to_string(),
+                )));
+        }
         playlist_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
         let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
             .change_context(SpotifyError)?;

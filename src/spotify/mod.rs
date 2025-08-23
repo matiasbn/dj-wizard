@@ -57,7 +57,7 @@ impl Spotify {
 }
 
 pub trait SpotifyCRUD {
-    fn create_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()>;
+    fn update_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()>;
 
     fn update_spotify_to_soundeo_track(
         spotify_track_id: String,

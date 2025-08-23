@@ -138,7 +138,7 @@ impl SpotifyCommands {
                     .get_playlist_info(user_config, true)
                     .await
                     .change_context(SpotifyError)?;
-                DjWizardLog::create_spotify_playlist(playlist.clone())
+                DjWizardLog::update_spotify_playlist(playlist.clone())
                     .change_context(SpotifyError)?;
                 println!(
                     "Playlist {} successfully stored",
@@ -156,7 +156,7 @@ impl SpotifyCommands {
             .get_playlist_info(user_config, true)
             .await
             .change_context(SpotifyError)?;
-        DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
+        DjWizardLog::update_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
         println!(
             "Playlist {} successfully updated",
             playlist.name.clone().green()
@@ -299,7 +299,7 @@ impl SpotifyCommands {
                 .await
                 .change_context(SpotifyError)?;
 
-            DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
+            DjWizardLog::update_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
         }
 
         // --- (Optional) Clean up stale playlists that were deleted from Spotify ---
