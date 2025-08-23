@@ -163,20 +163,34 @@ impl SpotifyCommands {
         let mut next_url = Some("https://api.spotify.com/v1/me/playlists".to_string());
 
         while let Some(url) = next_url {
-            let response: PaginatedPlaylistsResponse = client
+            let response = client
                 .get(&url)
                 .bearer_auth(&user_config.spotify_access_token)
                 .send()
                 .await
                 .into_report()
-                .change_context(SpotifyError)?
+                .change_context(SpotifyError)?;
+
+            if !response.status().is_success() {
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                return Err(Report::new(SpotifyError)
+                    .attach_printable(format!("Spotify API returned an error: {}", error_body))
+                    .attach(Suggestion(
+                        "Your access token might have expired. Please log in again.".to_string(),
+                    )));
+            }
+
+            let paginated_response: PaginatedPlaylistsResponse = response
                 .json()
                 .await
                 .into_report()
                 .change_context(SpotifyError)?;
 
-            all_playlists.extend(response.items);
-            next_url = response.next;
+            all_playlists.extend(paginated_response.items);
+            next_url = paginated_response.next;
         }
 
         let public_playlists: Vec<ApiSimplePlaylist> =
