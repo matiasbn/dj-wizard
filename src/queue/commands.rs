@@ -26,6 +26,7 @@ pub enum QueueCommands {
     SaveToAvailableTracks,
     DownloadOnlyAvailableTracks,
     GetQueueInfo,
+    ManageQueue,
 }
 
 impl QueueCommands {
@@ -42,6 +43,7 @@ impl QueueCommands {
             QueueCommands::ResumeQueue => Self::resume_queue(resume_queue_flag).await,
             QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads().await,
             QueueCommands::GetQueueInfo => Self::get_queue_information(),
+            QueueCommands::ManageQueue => Self::manage_queue().await,
             QueueCommands::DownloadOnlyAvailableTracks => {
                 let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
                 soundeo_user
@@ -505,5 +507,140 @@ impl QueueCommands {
             })
             .collect();
         Ok(selected_tracks)
+    }
+
+    async fn manage_queue() -> QueueResult<()> {
+        let options = vec!["Prioritize by Genre", "Prioritize by Artist"];
+        let selection = Dialoguer::select(
+            "How do you want to manage the queue?".to_string(),
+            options,
+            None,
+        )
+        .change_context(QueueError)?;
+
+        match selection {
+            0 => Self::prioritize_by_genre().await?,
+            1 => Self::prioritize_by_artist().await?,
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    async fn prioritize_by_genre() -> QueueResult<()> {
+        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+
+        if queued_tracks.is_empty() {
+            println!("The queue is empty. Nothing to manage.");
+            return Ok(());
+        }
+
+        let mut genres_in_queue = HashSet::new();
+        for track in &queued_tracks {
+            if let Some(track_info) = soundeo_info.tracks_info.get(&track.track_id) {
+                genres_in_queue.insert(track_info.genre.clone());
+            }
+        }
+
+        if genres_in_queue.is_empty() {
+            println!("No genre information available for the tracks in the queue.");
+            return Ok(());
+        }
+
+        let mut genres: Vec<String> = genres_in_queue.into_iter().collect();
+        genres.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+        let selection = Dialoguer::select(
+            "Select a genre to prioritize".to_string(),
+            genres.clone(),
+            None,
+        )
+        .change_context(QueueError)?;
+
+        let selected_genre = &genres[selection];
+
+        let track_ids_to_promote: Vec<String> = queued_tracks
+            .iter()
+            .filter(|q_track| {
+                soundeo_info
+                    .tracks_info
+                    .get(&q_track.track_id)
+                    .map_or(false, |info| &info.genre == selected_genre)
+            })
+            .map(|q_track| q_track.track_id.clone())
+            .collect();
+
+        if track_ids_to_promote.is_empty() {
+            println!("No tracks found for the selected genre.");
+        } else {
+            DjWizardLog::promote_tracks_to_top(&track_ids_to_promote).change_context(QueueError)?;
+        }
+
+        Ok(())
+    }
+
+    async fn prioritize_by_artist() -> QueueResult<()> {
+        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+
+        if queued_tracks.is_empty() {
+            println!("The queue is empty. Nothing to manage.");
+            return Ok(());
+        }
+
+        let artist_query = Dialoguer::input("Enter artist name to search for:".to_string())
+            .change_context(QueueError)?;
+        if artist_query.trim().is_empty() {
+            println!("Search query cannot be empty.");
+            return Ok(());
+        }
+
+        let matching_tracks: Vec<&QueuedTrack> = queued_tracks
+            .iter()
+            .filter(|q_track| {
+                soundeo_info
+                    .tracks_info
+                    .get(&q_track.track_id)
+                    .map_or(false, |info| {
+                        info.title
+                            .to_lowercase()
+                            .contains(&artist_query.to_lowercase())
+                    })
+            })
+            .collect();
+
+        if matching_tracks.is_empty() {
+            println!("No tracks found in the queue matching your search.");
+            return Ok(());
+        }
+
+        let track_titles: Vec<String> = matching_tracks
+            .iter()
+            .map(|q_track| {
+                soundeo_info
+                    .tracks_info
+                    .get(&q_track.track_id)
+                    .map_or_else(|| "Unknown Track".to_string(), |info| info.title.clone())
+            })
+            .collect();
+
+        let selections = Dialoguer::multiselect(
+            "All matching tracks are selected. Deselect any you want to DISCARD (spacebar to toggle, enter to confirm):"
+                .to_string(),
+            track_titles,
+            Some(&vec![true; matching_tracks.len()]),
+            false,
+        )
+        .change_context(QueueError)?;
+
+        if !selections.is_empty() {
+            let track_ids_to_promote: Vec<String> = selections
+                .iter()
+                .map(|&index| matching_tracks[index].track_id.clone())
+                .collect();
+            DjWizardLog::promote_tracks_to_top(&track_ids_to_promote).change_context(QueueError)?;
+        }
+
+        Ok(())
     }
 }

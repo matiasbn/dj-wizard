@@ -229,6 +229,46 @@ impl DjWizardLog {
         Ok(true)
     }
 
+    pub fn promote_tracks_to_top(track_ids_to_promote: &[String]) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+
+        // 1. Find the lowest (most priority) order_key among existing High priority tracks.
+        let min_high_priority_key = log
+            .queued_tracks
+            .iter()
+            .filter(|t| t.priority == Priority::High)
+            .map(|t| t.order_key)
+            .fold(f64::INFINITY, f64::min);
+
+        // 2. Determine the starting point for the new order_keys.
+        // If no 'High' tracks exist, we can start from 0. Otherwise, start below the current minimum.
+        let mut next_order_key = if min_high_priority_key.is_finite() {
+            min_high_priority_key - 1.0
+        } else {
+            0.0
+        };
+
+        // 3. Update the selected tracks.
+        for track in log.queued_tracks.iter_mut() {
+            if track_ids_to_promote.contains(&track.track_id) {
+                track.priority = Priority::High;
+                track.order_key = next_order_key;
+                next_order_key -= 1.0; // Each subsequent promoted track gets an even lower key.
+            }
+        }
+
+        log.save_log()?;
+        println!(
+            "{}",
+            format!(
+                "{} tracks have been moved to the top of the queue.",
+                track_ids_to_promote.len()
+            )
+            .green()
+        );
+        Ok(())
+    }
+
     pub fn remove_queued_track(track_id: String) -> DjWizardLogResult<bool> {
         let mut log = Self::read_log()?;
         log.last_update = SystemTime::now()
