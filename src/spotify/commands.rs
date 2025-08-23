@@ -166,7 +166,7 @@ impl SpotifyCommands {
         println!("Fetching your public playlists from Spotify...");
         let client = reqwest::Client::new();
         let mut all_playlists: Vec<ApiSimplePlaylist> = Vec::new();
-        let mut next_url = Some("https://api.spotify.com/v1/me/playlists".to_string());
+        let mut next_url = Some("https://api.spotify.com/v1/me/playlists?limit=50".to_string());
 
         while let Some(url) = next_url {
             let mut response = client
@@ -213,20 +213,65 @@ impl SpotifyCommands {
             next_url = paginated_response.next;
         }
 
-        let public_playlists: Vec<ApiSimplePlaylist> =
+        let mut public_playlists: Vec<ApiSimplePlaylist> =
             all_playlists.into_iter().filter(|p| p.public).collect();
+
+        // Sort playlists alphabetically for a better user experience
+        public_playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
         if public_playlists.is_empty() {
             println!("{}", "No public playlists found in your account.".yellow());
             return Ok(());
         }
 
+        println!("Found {} public playlists.", public_playlists.len());
+
+        let options = vec![
+            "Sync all public playlists",
+            "Select specific playlists to sync",
+        ];
+        let selection =
+            Dialoguer::select("How would you like to sync?".to_string(), options, Some(0))
+                .change_context(SpotifyError)?;
+
+        let playlists_to_sync = match selection {
+            0 => public_playlists,
+            1 => {
+                let playlist_names: Vec<String> =
+                    public_playlists.iter().map(|p| p.name.clone()).collect();
+
+                let selections = Dialoguer::multiselect(
+                    "Select playlists to sync (space to select, enter to confirm)".to_string(),
+                    playlist_names,
+                    Some(&vec![false; public_playlists.len()]),
+                    false,
+                )
+                .change_context(SpotifyError)?;
+
+                if selections.is_empty() {
+                    println!("No playlists selected. Operation cancelled.");
+                    return Ok(());
+                }
+
+                selections
+                    .into_iter()
+                    .map(|i| public_playlists[i].clone())
+                    .collect()
+            }
+            _ => unreachable!(),
+        };
+
+        if playlists_to_sync.is_empty() {
+            println!("{}", "No playlists to sync.".yellow());
+            return Ok(());
+        }
+
         println!(
-            "Found {} public playlists. Starting sync...",
-            public_playlists.len()
+            "\nStarting sync for {} playlists...",
+            playlists_to_sync.len()
         );
 
-        for simple_playlist in public_playlists {
+        for simple_playlist in playlists_to_sync {
             println!("Syncing playlist: {}", simple_playlist.name.clone().green());
             let playlist_url = format!("https://open.spotify.com/playlist/{}", simple_playlist.id);
             let mut playlist = SpotifyPlaylist::new(playlist_url).change_context(SpotifyError)?;
@@ -239,10 +284,7 @@ impl SpotifyCommands {
             DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
         }
 
-        println!(
-            "\n{}",
-            "All public playlists have been synced successfully.".green()
-        );
+        println!("\n{}", "Sync complete.".green());
         Ok(())
     }
 
