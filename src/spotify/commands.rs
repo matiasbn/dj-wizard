@@ -43,11 +43,11 @@ struct PaginatedPlaylistsResponse {
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
-    SyncPublicPlaylists,
-    CreateCuratedQueue,
-    PairAndQueueUnpairedTracks,
+    DownloadFromMultiplePlaylists,
+    ManuallyPairTracks,
+    SyncMyPublicPlaylists,
     AddNewPlaylistFromUrl,
-    UpdatePlaylist,
+    UpdatePlaylistData,
     QueueTracksFromPlaylist,
     PrintDownloadedTracksByPlaylist,
     DeletePlaylists,
@@ -86,18 +86,18 @@ impl SpotifyCommands {
             SpotifyCommands::AddNewPlaylistFromUrl => {
                 Self::add_new_playlist(&mut user_config).await
             }
-            SpotifyCommands::UpdatePlaylist => Self::update_playlist(&mut user_config).await,
-            SpotifyCommands::SyncPublicPlaylists => {
+            SpotifyCommands::UpdatePlaylistData => Self::update_playlist(&mut user_config).await,
+            SpotifyCommands::SyncMyPublicPlaylists => {
                 Self::sync_public_playlists(&mut user_config).await
             }
-            SpotifyCommands::PairAndQueueUnpairedTracks => {
-                Self::pair_and_queue_unpaired_tracks().await
-            }
+            SpotifyCommands::ManuallyPairTracks => Self::pair_and_queue_unpaired_tracks().await,
             SpotifyCommands::QueueTracksFromPlaylist => Self::queue_tracks_from_playlist().await,
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
             }
-            SpotifyCommands::CreateCuratedQueue => Self::create_curated_queue().await,
+            SpotifyCommands::DownloadFromMultiplePlaylists => {
+                Self::download_from_multiple_playlists().await
+            }
             SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
             SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
         };
@@ -607,7 +607,7 @@ impl SpotifyCommands {
         Ok(())
     }
 
-    async fn create_curated_queue() -> SpotifyResult<()> {
+    async fn download_from_multiple_playlists() -> SpotifyResult<()> {
         // 1. Get playlists and let user select multiple
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         if spotify_log.playlists.is_empty() {
