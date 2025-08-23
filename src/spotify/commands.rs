@@ -359,7 +359,7 @@ impl SpotifyCommands {
 
         // This function now pairs and, upon successful pairing, queues the tracks.
         playlist
-            .pair_unpaired_tracks(&mut soundeo_user)
+            .pair_unpaired_tracks(&mut soundeo_user, Priority::Normal)
             .await
             .change_context(SpotifyError)?;
 
