@@ -20,13 +20,13 @@ use crate::user::SoundeoUser;
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum QueueCommands {
+    ResumeQueue,
+    ManageQueue,
+    GetQueueInfo,
+    SaveToAvailableTracks,
     AddToQueueFromUrl,
     AddToQueueFromUrlList,
-    ResumeQueue,
-    SaveToAvailableTracks,
     DownloadOnlyAvailableTracks,
-    GetQueueInfo,
-    ManageQueue,
 }
 
 impl QueueCommands {
