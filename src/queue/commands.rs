@@ -8,7 +8,7 @@ use strum::IntoEnumIterator;
 use url::Url;
 
 use crate::dialoguer::Dialoguer;
-use crate::log::DjWizardLog;
+use crate::log::{DjWizardLog, Priority, QueuedTrack};
 use crate::queue::{QueueError, QueueResult};
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
@@ -64,9 +64,26 @@ impl QueueCommands {
         options[selection].clone()
     }
 
+    fn prompt_for_priority() -> QueueResult<Priority> {
+        let priority_options = vec!["High (download first)", "Normal", "Low (download last)"];
+        let selection = Dialoguer::select(
+            "Choose a priority for this batch of songs".to_string(),
+            priority_options,
+            Some(1), // "Normal" as option by default
+        )
+        .change_context(QueueError)?;
+
+        let selected_priority = match selection {
+            0 => Priority::High,
+            1 => Priority::Normal,
+            _ => Priority::Low,
+        };
+        Ok(selected_priority)
+    }
+
     async fn add_to_queue_from_url_list() -> QueueResult<()> {
         let url_list = DjWizardLog::get_url_list().change_context(QueueError)?;
-        let prompt_text = format!("Do you want to download the already downloded tracks again?");
+        let prompt_text = format!("Do you want to download the already downloaded tracks again?");
         let repeat_download =
             Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
 
@@ -107,11 +124,13 @@ impl QueueCommands {
             }
         };
 
+        let selected_priority = Self::prompt_for_priority()?;
+
         let repeat_download_result = match repeat_download {
             Some(repeat_download_bool) => repeat_download_bool,
             None => {
                 let prompt_text =
-                    format!("Do you want to download the already downloded tracks again?");
+                    format!("Do you want to download the already downloaded tracks again?");
                 let repeat_download =
                     Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
                 repeat_download
@@ -170,8 +189,8 @@ impl QueueCommands {
                 continue;
             }
 
-            let queue_result =
-                DjWizardLog::add_queued_track(track_id.clone()).change_context(QueueError)?;
+            let queue_result = DjWizardLog::add_queued_track(track_id.clone(), selected_priority)
+                .change_context(QueueError)?;
             if queue_result {
                 println!(
                     "Track with id {} successfully queued",
@@ -209,9 +228,15 @@ impl QueueCommands {
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
-        let prompt_text = format!("Do you want to download the already downloded tracks again?");
+        let prompt_text = format!("Do you want to download the already downloaded tracks again?");
         let repeat_download =
             Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
+
+        println!(
+            "\n{}",
+            "If a track cannot be added to the collection, it will be added to the queue with High priority.".yellow()
+        );
+        let fallback_priority = Priority::High;
 
         for (track_id_index, track_id) in track_list.track_ids.iter().enumerate() {
             println!(
@@ -255,26 +280,22 @@ impl QueueCommands {
                 Ok(_) => {
                     DjWizardLog::add_available_track(track_id.clone())
                         .change_context(QueueError)?;
-                    if queued_tracks.get(&track_id.clone()).is_some() {
+                    if queued_tracks.iter().any(|t| t.track_id == *track_id) {
                         DjWizardLog::remove_queued_track(track_id.clone())
                             .change_context(QueueError)?;
+                        println!("Track removed from queue");
                     }
                     println!(
                         "Track successfully added to the {} and available for download",
                         "Available tracks queue".green()
                     );
-                    if queued_tracks.get(&track_id.clone()).is_some() {
-                        DjWizardLog::remove_queued_track(track_id.clone())
-                            .change_context(QueueError)?;
-                        println!("Track removed from queue");
-                    }
                 }
                 Err(err) => {
-                    DjWizardLog::add_queued_track(track_id.clone()).change_context(QueueError)?;
                     println!("Error adding track to the collection:\n{:#?}", err);
-                    println!("Adding to the queue");
-                    let queue_result = DjWizardLog::add_queued_track(track_id.clone())
-                        .change_context(QueueError)?;
+                    println!("Adding to the queue with priority {:?}", fallback_priority);
+                    let queue_result =
+                        DjWizardLog::add_queued_track(track_id.clone(), fallback_priority)
+                            .change_context(QueueError)?;
                     if queue_result {
                         println!(
                             "Track with id {} successfully queued",
@@ -293,7 +314,7 @@ impl QueueCommands {
     }
 
     async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
-        // if the resume queue flag is provided, skip the dialog to filter by genre
+        // If the resume queue flag is provided, skip the dialog to filter by genre
         // since we need complete automation
         let filtered_by_genre = if resume_queue_flag {
             false
@@ -301,14 +322,21 @@ impl QueueCommands {
             Dialoguer::select_yes_or_no("Do you want to filter by genre".to_string())
                 .change_context(QueueError)?
         };
-        let queued_tracks = if filtered_by_genre {
+        let mut queued_tracks = if filtered_by_genre {
             Self::filter_queue()?
         } else {
-            DjWizardLog::get_queued_tracks()
-                .change_context(QueueError)?
-                .into_iter()
-                .collect()
+            DjWizardLog::get_queued_tracks().change_context(QueueError)?
         };
+
+        // Sort the queue by priority and then by order_key
+        queued_tracks.sort_by(|a, b| {
+            let priority_ord = a.priority.cmp(&b.priority);
+            if priority_ord != std::cmp::Ordering::Equal {
+                return priority_ord;
+            }
+            a.order_key.partial_cmp(&b.order_key).unwrap()
+        });
+
         let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
         soundeo_user
             .login_and_update_user_info()
@@ -320,8 +348,8 @@ impl QueueCommands {
         );
 
         let queued_tracks_length = queued_tracks.len();
-        for (track_id_index, track_id) in queued_tracks.clone().into_iter().enumerate() {
-            let mut track_info = SoundeoTrack::new(track_id.clone());
+        for (track_id_index, queued_track) in queued_tracks.iter().enumerate() {
+            let mut track_info = SoundeoTrack::new(queued_track.track_id.clone());
             track_info
                 .get_info(&soundeo_user, true)
                 .await
@@ -335,9 +363,10 @@ impl QueueCommands {
                         queued_tracks_length,
                         track_info.title.green()
                     );
-                    DjWizardLog::add_available_track(track_id.clone())
+                    DjWizardLog::add_available_track(queued_track.track_id.clone())
                         .change_context(QueueError)?;
-                    DjWizardLog::remove_queued_track(track_id).change_context(QueueError)?;
+                    DjWizardLog::remove_queued_track(queued_track.track_id.clone())
+                        .change_context(QueueError)?;
                 }
                 _ => {
                     println!(
@@ -353,8 +382,12 @@ impl QueueCommands {
         let available_downloads = DjWizardLog::get_available_tracks().change_context(QueueError)?;
 
         if available_downloads.is_empty() {
-            let first_id = queued_tracks.get(0).unwrap().clone();
-            let mut track_info = SoundeoTrack::new(first_id.clone());
+            if queued_tracks.is_empty() {
+                println!("{}", "The queue is empty. Nothing to do.".yellow());
+                return Ok(());
+            }
+            let first_id = &queued_tracks.get(0).unwrap().track_id;
+            let mut track_info = SoundeoTrack::new(first_id.to_string());
             track_info
                 .get_info(&soundeo_user, true)
                 .await
@@ -378,12 +411,12 @@ impl QueueCommands {
             .collect();
 
         if available_tracks.is_empty() {
-            println!("No available to download tracks",);
+            println!("No tracks available to download");
             return Ok(());
         }
 
         println!(
-            "{} available to download tracks",
+            "{} tracks available to download",
             format!("{}", available_tracks.len()).cyan()
         );
 
@@ -416,12 +449,12 @@ impl QueueCommands {
     }
 
     fn get_queue_information() -> QueueResult<()> {
-        let Soundeo { tracks_info } = DjWizardLog::get_soundeo().change_context(QueueError)?;
-        // let tracks = soundeo
+        let Soundeo { tracks_info, .. } = DjWizardLog::get_soundeo().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
         let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
-            .into_iter()
-            .map(|q_track| tracks_info.get(&q_track).unwrap().clone())
+            .iter()
+            .filter_map(|q_track| tracks_info.get(&q_track.track_id))
+            .cloned()
             .collect();
         let mut genres_hash_set = HashSet::new();
         for track in q_tracks_info.clone() {
@@ -446,34 +479,31 @@ impl QueueCommands {
         Ok(())
     }
 
-    fn filter_queue() -> QueueResult<Vec<String>> {
-        let Soundeo { tracks_info } = DjWizardLog::get_soundeo().change_context(QueueError)?;
-        // let tracks = soundeo
+    fn filter_queue() -> QueueResult<Vec<QueuedTrack>> {
+        let Soundeo { tracks_info, .. } = DjWizardLog::get_soundeo().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
-        let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
-            .into_iter()
-            .map(|q_track| tracks_info.get(&q_track).unwrap().clone())
-            .collect();
+
         let mut genres_hash_set = HashSet::new();
-        for track in q_tracks_info.clone() {
-            genres_hash_set.insert(track.genre);
+        for q_track in &queued_tracks {
+            if let Some(track_info) = tracks_info.get(&q_track.track_id) {
+                genres_hash_set.insert(track_info.genre.clone());
+            }
         }
+
         let mut genres = genres_hash_set.into_iter().collect::<Vec<String>>();
         genres.sort();
         let selection = Dialoguer::select("Select the genre".to_string(), genres.clone(), None)
             .change_context(QueueError)?;
-        let selected_genre = genres[selection].clone();
-        let selected_tracks = q_tracks_info
-            .clone()
+        let selected_genre = &genres[selection];
+
+        let selected_tracks = queued_tracks
             .into_iter()
-            .filter_map(|track| {
-                if track.genre == selected_genre {
-                    Some(track.id)
-                } else {
-                    None
-                }
+            .filter(|q_track| {
+                tracks_info
+                    .get(&q_track.track_id)
+                    .map_or(false, |info| &info.genre == selected_genre)
             })
-            .collect::<Vec<String>>();
+            .collect();
         Ok(selected_tracks)
     }
 }

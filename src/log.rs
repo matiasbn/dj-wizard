@@ -11,7 +11,7 @@ use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error, Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::soundeo::track::SoundeoTrack;
@@ -31,10 +31,25 @@ impl std::error::Error for DjWizardLogError {}
 
 pub type DjWizardLogResult<T> = error_stack::Result<T, DjWizardLogError>;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    High,
+    Normal,
+    Low,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QueuedTrack {
+    pub track_id: String,
+    pub priority: Priority,
+    pub order_key: f64,
+    pub added_at: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DjWizardLog {
     pub last_update: u64,
-    pub queued_tracks: HashSet<String>,
+    pub queued_tracks: Vec<QueuedTrack>,
     #[serde(default)]
     pub available_tracks: HashSet<String>,
     #[serde(default)]
@@ -44,7 +59,7 @@ pub struct DjWizardLog {
 }
 
 impl DjWizardLog {
-    pub fn get_queued_tracks() -> DjWizardLogResult<HashSet<String>> {
+    pub fn get_queued_tracks() -> DjWizardLogResult<Vec<QueuedTrack>> {
         let log = Self::read_log()?;
         Ok(log.queued_tracks)
     }
@@ -74,18 +89,79 @@ impl DjWizardLog {
         let soundeo_log_path = Self::get_log_path(&soundeo_user);
         let soundeo_log_file_path = Path::new(&soundeo_log_path);
         let soundeo_log: Self = if soundeo_log_file_path.is_file() {
-            let soundeo_log: Self = serde_json::from_str(
-                &read_to_string(&soundeo_log_file_path)
-                    .into_report()
-                    .change_context(DjWizardLogError)?,
-            )
-            .into_report()
-            .change_context(DjWizardLogError)?;
-            soundeo_log
+            let log_content = read_to_string(&soundeo_log_file_path)
+                .into_report()
+                .change_context(DjWizardLogError)?;
+
+            // Attempt to deserialize into the new format first. If it works, we're done.
+            if let Ok(log) = serde_json::from_str::<Self>(&log_content) {
+                return Ok(log);
+            }
+
+            // If that failed, it's likely the old format. Let's try to migrate.
+            println!(
+                "{}",
+                "Old log format detected. Attempting to migrate queue automatically...".yellow()
+            );
+
+            // Use serde_json::Value to inspect the structure without crashing.
+            let mut json_value: Value = serde_json::from_str(&log_content)
+                .into_report()
+                .change_context(DjWizardLogError)?;
+
+            let mut migration_performed = false;
+            // Check if `queued_tracks` is an array of strings (the old format)
+            if let Some(queue_value) = json_value.get_mut("queued_tracks") {
+                if queue_value.is_array()
+                    && queue_value
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|v| v.is_string())
+                {
+                    let old_queue: HashSet<String> = serde_json::from_value(queue_value.clone())
+                        .into_report()
+                        .change_context(DjWizardLogError)?;
+
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .into_report()
+                        .change_context(DjWizardLogError)?
+                        .as_secs();
+
+                    let new_queue: Vec<QueuedTrack> = old_queue
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, track_id)| QueuedTrack {
+                            track_id,
+                            priority: Priority::Normal, // Default priority
+                            order_key: i as f64,        // Preserve some order
+                            added_at: now,
+                        })
+                        .collect();
+
+                    *queue_value = serde_json::to_value(new_queue)
+                        .into_report()
+                        .change_context(DjWizardLogError)?;
+                    migration_performed = true;
+                }
+            }
+
+            let mut log: Self = serde_json::from_value(json_value).into_report().attach_printable("Failed to deserialize log file after attempting migration. The log file might be corrupted.").change_context(DjWizardLogError)?;
+
+            if migration_performed {
+                log.save_log()?;
+                println!(
+                    "{}",
+                    "Migration successful! Your queue has been updated to the new prioritized format."
+                        .green()
+                );
+            }
+            log
         } else {
             Self {
                 last_update: 0,
-                queued_tracks: HashSet::new(),
+                queued_tracks: Vec::new(),
                 soundeo: Soundeo::new(),
                 spotify: Spotify::new(),
                 available_tracks: HashSet::new(),
@@ -119,16 +195,38 @@ impl DjWizardLog {
         Ok(format!("{}/soundeo_log.json", user.download_path))
     }
 
-    pub fn add_queued_track(track_id: String) -> DjWizardLogResult<bool> {
+    pub fn add_queued_track(track_id: String, priority: Priority) -> DjWizardLogResult<bool> {
         let mut log = Self::read_log()?;
         log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let result = log.queued_tracks.insert(track_id);
+
+        if log.queued_tracks.iter().any(|t| t.track_id == track_id) {
+            return Ok(false);
+        }
+
+        let max_order_key_in_group = log
+            .queued_tracks
+            .iter()
+            .filter(|t| t.priority == priority)
+            .map(|t| t.order_key)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let new_track = QueuedTrack {
+            track_id,
+            priority,
+            order_key: if max_order_key_in_group.is_finite() {
+                max_order_key_in_group + 1.0
+            } else {
+                1.0
+            },
+            added_at: log.last_update,
+        };
+        log.queued_tracks.push(new_track);
         log.save_log()?;
-        Ok(result)
+        Ok(true)
     }
 
     pub fn remove_queued_track(track_id: String) -> DjWizardLogResult<bool> {
@@ -138,9 +236,13 @@ impl DjWizardLog {
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let result = log.queued_tracks.remove(&track_id);
-        log.save_log()?;
-        Ok(result)
+        let initial_len = log.queued_tracks.len();
+        log.queued_tracks.retain(|t| t.track_id != track_id);
+        let was_removed = log.queued_tracks.len() < initial_len;
+        if was_removed {
+            log.save_log()?;
+        }
+        Ok(was_removed)
     }
 
     pub fn add_available_track(track_id: String) -> DjWizardLogResult<bool> {
