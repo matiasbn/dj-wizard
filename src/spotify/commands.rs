@@ -47,6 +47,7 @@ pub enum SpotifyCommands {
     UpdatePlaylist,
     AddNewPlaylistFromUrl,
     PrintDownloadedTracksByPlaylist,
+    DeletePlaylists,
 }
 
 impl SpotifyCommands {
@@ -89,6 +90,7 @@ impl SpotifyCommands {
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
             }
+            SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
         };
     }
 
@@ -323,6 +325,61 @@ impl SpotifyCommands {
                 soundeo_track.clone().get_track_url().cyan()
             );
         }
+        Ok(())
+    }
+
+    fn delete_playlists() -> SpotifyResult<()> {
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        if spotify_log.playlists.is_empty() {
+            println!("{}", "No Spotify playlists found in the log.".yellow());
+            return Ok(());
+        }
+
+        let mut playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
+        playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        let playlist_names: Vec<String> = playlists.iter().map(|p| p.name.clone()).collect();
+
+        let selections = Dialoguer::multiselect(
+            "Select the playlists you want to delete from the local log (press space to select, enter to confirm)".to_string(),
+            playlist_names,
+            Some(&vec![false; playlists.len()]),
+            false,
+        )
+        .change_context(SpotifyError)?;
+
+        if selections.is_empty() {
+            println!("No playlists selected. Operation cancelled.");
+            return Ok(());
+        }
+
+        let playlists_to_delete: Vec<SpotifyPlaylist> =
+            selections.iter().map(|&i| playlists[i].clone()).collect();
+
+        println!("\nYou have selected the following playlists for deletion:");
+        for p in &playlists_to_delete {
+            println!("- {}", p.name.red());
+        }
+
+        let confirmation = Dialoguer::confirm(
+            "Are you sure you want to permanently delete these playlists from the local log? This action cannot be undone.".to_string(),
+            Some(false),
+        ).change_context(SpotifyError)?;
+
+        if confirmation {
+            let ids_to_delete: Vec<String> = playlists_to_delete
+                .iter()
+                .map(|p| p.spotify_playlist_id.clone())
+                .collect();
+            DjWizardLog::delete_spotify_playlists(&ids_to_delete).change_context(SpotifyError)?;
+            println!(
+                "\n{}",
+                "Selected playlists have been deleted successfully.".green()
+            );
+        } else {
+            println!("Deletion cancelled.");
+        }
+
         Ok(())
     }
 

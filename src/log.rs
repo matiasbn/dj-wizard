@@ -428,6 +428,22 @@ impl SpotifyCRUD for DjWizardLog {
         log.save_log()?;
         Ok(())
     }
+
+    fn delete_spotify_playlists(playlist_ids: &[String]) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        let mut deleted_count = 0;
+
+        for id in playlist_ids {
+            if log.spotify.playlists.remove(id).is_some() {
+                deleted_count += 1;
+            }
+        }
+
+        if deleted_count > 0 {
+            log.save_log()?;
+        }
+        Ok(())
+    }
 }
 
 impl UrlListCRUD for DjWizardLog {

@@ -63,4 +63,6 @@ pub trait SpotifyCRUD {
         spotify_track_id: String,
         soundeo_track_id: Option<String>,
     ) -> DjWizardLogResult<()>;
+
+    fn delete_spotify_playlists(playlist_ids: &[String]) -> DjWizardLogResult<()>;
 }
