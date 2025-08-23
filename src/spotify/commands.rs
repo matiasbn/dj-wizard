@@ -48,6 +48,7 @@ pub enum SpotifyCommands {
     UpdatePlaylist,
     PrintDownloadedTracksByPlaylist,
     DeletePlaylists,
+    CountQueuedTracksByPlaylist,
 }
 
 impl SpotifyCommands {
@@ -91,6 +92,7 @@ impl SpotifyCommands {
                 Self::print_downloaded_songs_by_playlist()
             }
             SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
+            SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
         };
     }
 
@@ -474,6 +476,72 @@ impl SpotifyCommands {
             );
         } else {
             println!("Deletion cancelled.");
+        }
+
+        Ok(())
+    }
+
+    fn count_queued_tracks_by_playlist() -> SpotifyResult<()> {
+        // 1. Get all necessary data from the log
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(SpotifyError)?;
+
+        if spotify_log.playlists.is_empty() {
+            println!(
+                "{}",
+                "No Spotify playlists found in the log. Sync or add some first.".yellow()
+            );
+            return Ok(());
+        }
+
+        if queued_tracks.is_empty() {
+            println!("{}", "The download queue is currently empty.".yellow());
+            return Ok(());
+        }
+
+        // 2. Prepare data for efficient lookup
+        let queued_soundeo_ids: std::collections::HashSet<String> =
+            queued_tracks.iter().map(|t| t.track_id.clone()).collect();
+
+        // 3. Prompt user to select playlists
+        let mut local_playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
+        local_playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        let playlist_names: Vec<String> = local_playlists.iter().map(|p| p.name.clone()).collect();
+
+        let selections = Dialoguer::multiselect(
+            "Select playlists to check against the queue (press space to select, enter to confirm)"
+                .to_string(),
+            playlist_names,
+            Some(&vec![false; local_playlists.len()]),
+            false,
+        )
+        .change_context(SpotifyError)?;
+
+        if selections.is_empty() {
+            println!("No playlists selected. Operation cancelled.");
+            return Ok(());
+        }
+
+        println!("\n--- Queued Tracks Report ---");
+
+        // 4. Process each selected playlist and print the count
+        for index in selections {
+            let selected_playlist = &local_playlists[index];
+            let count = selected_playlist
+                .tracks
+                .keys()
+                .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
+                .filter_map(|soundeo_id_opt| soundeo_id_opt.as_ref())
+                .filter(|soundeo_id| queued_soundeo_ids.contains(*soundeo_id))
+                .count();
+
+            println!(
+                "Playlist '{}': {} of {} tracks are in the queue.",
+                selected_playlist.name.cyan(),
+                count.to_string().green(),
+                selected_playlist.tracks.len()
+            );
         }
 
         Ok(())
