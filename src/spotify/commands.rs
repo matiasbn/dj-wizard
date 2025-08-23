@@ -43,9 +43,9 @@ struct PaginatedPlaylistsResponse {
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
     SyncPublicPlaylists,
-    AddNewPlaylistFromUrl,
-    UpdatePlaylist,
     DownloadTracksFromPlaylist,
+    UpdatePlaylist,
+    AddNewPlaylistFromUrl,
     PrintDownloadedTracksByPlaylist,
 }
 
