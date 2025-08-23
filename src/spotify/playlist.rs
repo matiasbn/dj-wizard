@@ -260,19 +260,24 @@ impl SpotifyPlaylist {
         if auto_pair_single_only {
             println!("Starting auto-pairing for single-match tracks...");
             let mut paired_count = 0;
-            for (spotify_track_id, mut spotify_track) in unpaired_tracks {
+            let unpaired_len = unpaired_tracks.len();
+            for (i, (spotify_track_id, mut spotify_track)) in
+                unpaired_tracks.into_iter().enumerate()
+            {
+                println!(
+                    "Processing track {}/{}: {} by {}",
+                    format!("{}", i + 1).cyan(),
+                    format!("{}", unpaired_len).cyan(),
+                    spotify_track.title.yellow(),
+                    spotify_track.artists.yellow()
+                );
                 let result = spotify_track
                     .find_single_soundeo_match(soundeo_user)
                     .await?;
 
                 if let AutoPairResult::Paired(soundeo_id) = result {
                     paired_count += 1;
-                    println!(
-                        "  ({count}) Paired '{title}' by '{artists}' automatically.",
-                        count = paired_count.to_string().cyan(),
-                        title = spotify_track.title.green(),
-                        artists = spotify_track.artists.yellow()
-                    );
+                    println!("  └─ {} Paired automatically.", "✔".green());
                     DjWizardLog::update_spotify_to_soundeo_track(
                         spotify_track_id,
                         Some(soundeo_id.clone()),
@@ -289,6 +294,11 @@ impl SpotifyPlaylist {
                     } else {
                         println!("    └─ Already in download queue.");
                     }
+                } else {
+                    println!(
+                        "  └─ {} Not auto-paired (multiple matches or no match found).",
+                        "✖".red()
+                    );
                 }
             }
             println!(
