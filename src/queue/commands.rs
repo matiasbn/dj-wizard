@@ -510,7 +510,11 @@ impl QueueCommands {
     }
 
     async fn manage_queue() -> QueueResult<()> {
-        let options = vec!["Prioritize by Genre", "Prioritize by Artist"];
+        let options = vec![
+            "Prioritize by Genre",
+            "Prioritize by Artist",
+            "Prioritize by Spotify Playlist",
+        ];
         let selection = Dialoguer::select(
             "How do you want to manage the queue?".to_string(),
             options,
@@ -521,6 +525,7 @@ impl QueueCommands {
         match selection {
             0 => Self::prioritize_by_genre().await?,
             1 => Self::prioritize_by_artist().await?,
+            2 => Self::prioritize_by_spotify_playlist().await?,
             _ => unreachable!(),
         }
         Ok(())
@@ -638,6 +643,41 @@ impl QueueCommands {
                 .iter()
                 .map(|&index| matching_tracks[index].track_id.clone())
                 .collect();
+            DjWizardLog::promote_tracks_to_top(&track_ids_to_promote).change_context(QueueError)?;
+        }
+
+        Ok(())
+    }
+
+    async fn prioritize_by_spotify_playlist() -> QueueResult<()> {
+        let playlist =
+            SpotifyPlaylist::prompt_select_playlist("Select a Spotify playlist to prioritize")
+                .change_context(QueueError)?;
+
+        let spotify_log = DjWizardLog::get_spotify().change_context(QueueError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+        let queued_track_ids: HashSet<String> =
+            queued_tracks.iter().map(|t| t.track_id.clone()).collect();
+
+        let track_ids_to_promote: Vec<String> = playlist
+            .tracks
+            .keys() // These are spotify_track_ids
+            .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
+            .filter_map(|soundeo_id_option| soundeo_id_option.as_ref())
+            .filter(|soundeo_id| queued_track_ids.contains(*soundeo_id))
+            .cloned()
+            .collect();
+
+        if track_ids_to_promote.is_empty() {
+            println!(
+                "{}",
+                format!(
+                    "No tracks from the playlist '{}' are currently in the queue.",
+                    playlist.name
+                )
+                .yellow()
+            );
+        } else {
             DjWizardLog::promote_tracks_to_top(&track_ids_to_promote).change_context(QueueError)?;
         }
 
