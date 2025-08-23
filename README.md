@@ -95,6 +95,23 @@ Fetches and displays detailed information about a specific Soundeo track.
 
 Integrates with Spotify playlists to find and download corresponding tracks from Soundeo.
 
+### Spotify API Test Configuration
+
+**Note:** This configuration is currently only required to run the specific unit tests that interact directly with the Spotify API (`test_get_playlist_from_api`). The main application functionality for fetching playlist data uses web scraping and does not require these credentials.
+
+To run the API integration tests, you need to set up your Spotify API credentials:
+
+1.  Create a file named `.env` in the project's root directory.
+2.  Open the file and add the following lines:
+
+    ```
+    SPOTIFY_CLIENT_ID=your_client_id
+    SPOTIFY_CLIENT_SECRET=your_client_secret
+    ```
+
+3.  Replace `your_client_id` and `your_client_secret` with your actual Spotify API credentials.
+4.  You can get these credentials from your Spotify Developer Dashboard.
+
 * Presents an interactive menu with the following options:
     * **Add New Playlist:**
         * Prompts for a public Spotify playlist URL.

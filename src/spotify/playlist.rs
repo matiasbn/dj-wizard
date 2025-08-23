@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use colored::Colorize;
-use colorize::AnsiColor;
+// use colorize::AnsiColor; // Remove or comment out this import to avoid ambiguity
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use headless_chrome::protocol::cdp::Target::CreateTarget;
 use headless_chrome::types::Bounds;
@@ -143,115 +143,42 @@ impl SpotifyPlaylist {
 #[cfg(test)]
 mod tests {
     use crate::spotify::playlist::SpotifyPlaylist;
+    use std::env;
+
     use colored::Colorize;
+    use dotenvy::dotenv;
     use serde::Deserialize;
 
     use super::*;
 
     #[tokio::test]
     async fn test_get_playlist() {
-        // DnB
         let playlist_url = "https://open.spotify.com/playlist/6YYCPN91F4xI1Z17Hzn7ir".to_string();
-        // House
-        // let playlist_url = "https://open.spotify.com/playlist/0B2bjiQkVcIHXXgqFb1k7T".to_string();
         let mut playlist = SpotifyPlaylist::new(playlist_url).unwrap();
         playlist.get_playlist_info().await.unwrap();
-
-        #[tokio::test]
-        #[ignore] // Se ignora para no fallar en CI si no hay credenciales. Ejecutar con: cargo test -- --ignored
-        async fn test_get_playlist_from_api() {
-            // --- PASO 1: Reemplaza con tus credenciales ---
-            // Es importante que estas credenciales no se suban a un repositorio público.
-            let client_id = "TU_CLIENT_ID";
-            let client_secret = "TU_CLIENT_SECRET";
-            let playlist_id = "0HUmClXaFGvEIi1rPvfqxg"; // Playlist de ejemplo de tu archivo
-
-            // Verifica que las credenciales no sean los placeholders
-            if client_id == "TU_CLIENT_ID" || client_secret == "TU_CLIENT_SECRET" {
-                println!("\n{}", "ATENCIÓN:");
-                println!("Por favor, reemplaza 'TU_CLIENT_ID' y 'TU_CLIENT_SECRET' con tus credenciales reales de la API de Spotify en el código de la prueba.");
-                println!("Puedes obtenerlas en: https://developer.spotify.com/dashboard\n");
-                return;
-            }
-
-            // --- PASO 2: Obtener el Token de Acceso (Client Credentials Flow) ---
-            #[derive(Deserialize, Debug)]
-            struct TokenResponse {
-                access_token: String,
-            }
-
-            let client = reqwest::Client::new();
-            let auth_string = format!("{}:{}", client_id, client_secret);
-            let encoded_auth = base64::encode(auth_string);
-
-            let token_response = client
-                .post("https://accounts.spotify.com/api/token")
-                .header("Authorization", format!("Basic {}", encoded_auth))
-                .form(&[("grant_type", "client_credentials")])
-                .send()
-                .await
-                .expect("Fallo al solicitar el token de acceso")
-                .json::<TokenResponse>()
-                .await
-                .expect("Fallo al parsear la respuesta del token");
-
-            let access_token = token_response.access_token;
-            println!("Token de acceso obtenido con éxito!");
-
-            // --- PASO 3: Obtener las canciones de la playlist ---
-            let tracks_url = format!(
-                "https://api.spotify.com/v1/playlists/{}/tracks",
-                playlist_id
-            );
-
-            let response_text = client
-                .get(&tracks_url)
-                .bearer_auth(&access_token)
-                .send()
-                .await
-                .expect("Fallo al obtener las canciones de la playlist")
-                .text()
-                .await
-                .expect("Fallo al leer la respuesta de las canciones");
-
-            // --- PASO 4: Imprimir los resultados ---
-            let v: serde_json::Value =
-                serde_json::from_str(&response_text).expect("Fallo al parsear el JSON");
-            println!("\n--- Canciones en la Playlist '{}' ---", playlist_id);
-            if let Some(items) = v["items"].as_array() {
-                for item in items {
-                    if let Some(track) = item.get("track") {
-                        if !track.is_null() {
-                            let track_name = track["name"].as_str().unwrap_or("N/A");
-                            let artists: Vec<String> = track["artists"]
-                                .as_array()
-                                .unwrap_or(&vec![])
-                                .iter()
-                                .map(|a| a["name"].as_str().unwrap_or("N/A").to_string())
-                                .collect();
-                            println!("- {} por {}", track_name, artists.join(", ").cyan());
-                        }
-                    }
-                }
-            }
-        }
-        // println!("{:#?}", api_response);
     }
 
     #[tokio::test]
     #[ignore] // Se ignora para no fallar en CI si no hay credenciales. Ejecutar con: cargo test -- --ignored
     async fn test_get_playlist_from_api() {
-        // --- PASO 1: Reemplaza con tus credenciales ---
-        // Es importante que estas credenciales no se suban a un repositorio público.
-        let client_id = "TU_CLIENT_ID";
-        let client_secret = "TU_CLIENT_SECRET";
+        // --- PASO 1: Cargar las credenciales desde .env ---
+        // Carga las variables del archivo .env en el directorio raíz del proyecto.
+        dotenv().ok();
+
+        let client_id = env::var("SPOTIFY_CLIENT_ID").expect(
+            "La variable de entorno SPOTIFY_CLIENT_ID no está definida. Asegúrate de tener un archivo .env con las credenciales.",
+        );
+        let client_secret = env::var("SPOTIFY_CLIENT_SECRET").expect(
+            "La variable de entorno SPOTIFY_CLIENT_SECRET no está definida. Asegúrate de tener un archivo .env con las credenciales.",
+        );
         let playlist_id = "0HUmClXaFGvEIi1rPvfqxg"; // Playlist de ejemplo de tu archivo
 
         // Verifica que las credenciales no sean los placeholders
         if client_id == "TU_CLIENT_ID" || client_secret == "TU_CLIENT_SECRET" {
-            println!("\n{}", "ATENCIÓN:");
-            println!("Por favor, reemplaza 'TU_CLIENT_ID' y 'TU_CLIENT_SECRET' con tus credenciales reales de la API de Spotify en el código de la prueba.");
+            println!("\n{}", colored::Colorize::yellow("ATENCIÓN:"));
+            println!("Por favor, reemplaza los valores en tu archivo .env con tus credenciales reales de la API de Spotify.");
             println!("Puedes obtenerlas en: https://developer.spotify.com/dashboard\n");
+            // La prueba se saltará si las credenciales son las de placeholder
             return;
         }
 
