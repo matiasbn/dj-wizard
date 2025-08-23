@@ -131,7 +131,7 @@ impl SpotifyCommands {
             }
             None => {
                 playlist
-                    .get_playlist_info(user_config)
+                    .get_playlist_info(user_config, true)
                     .await
                     .change_context(SpotifyError)?;
                 DjWizardLog::create_spotify_playlist(playlist.clone())
@@ -149,7 +149,7 @@ impl SpotifyCommands {
         let mut playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         playlist
-            .get_playlist_info(user_config)
+            .get_playlist_info(user_config, true)
             .await
             .change_context(SpotifyError)?;
         DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
@@ -230,7 +230,7 @@ impl SpotifyCommands {
             let mut playlist = SpotifyPlaylist::new(playlist_url).change_context(SpotifyError)?;
 
             playlist
-                .get_playlist_info(user_config)
+                .get_playlist_info(user_config, false)
                 .await
                 .change_context(SpotifyError)?;
 

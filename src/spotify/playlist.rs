@@ -82,8 +82,14 @@ impl SpotifyPlaylist {
     /// This function requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to be set
     /// in a `.env` file in the project root. It uses the Client Credentials Flow to
     /// authenticate with the Spotify API.
-    pub async fn get_playlist_info(&mut self, user_config: &mut User) -> SpotifyResult<()> {
-        println!("Getting playlist info from Spotify API...");
+    pub async fn get_playlist_info(
+        &mut self,
+        user_config: &mut User,
+        verbose: bool,
+    ) -> SpotifyResult<()> {
+        if verbose {
+            println!("Getting playlist info from Spotify API...");
+        }
 
         let client = reqwest::Client::new();
 
@@ -131,13 +137,15 @@ impl SpotifyPlaylist {
             .change_context(SpotifyError)?;
 
         self.name = api_playlist.name;
-        println!("The playlist name is {}", self.name.clone().green());
+        if verbose {
+            println!("The playlist name is {}", self.name.clone().green());
+        }
 
         // --- Process tracks and handle pagination ---
         self.tracks.clear();
         let mut next_url = api_playlist.tracks.next.take();
 
-        self.process_track_items(api_playlist.tracks.items);
+        self.process_track_items(api_playlist.tracks.items, verbose);
 
         while let Some(url) = next_url {
             let mut paginated_response_raw = client
@@ -177,14 +185,14 @@ impl SpotifyPlaylist {
                 .into_report()
                 .change_context(SpotifyError)?;
 
-            self.process_track_items(paginated_response.items);
+            self.process_track_items(paginated_response.items, verbose);
             next_url = paginated_response.next;
         }
 
         Ok(())
     }
 
-    fn process_track_items(&mut self, items: Vec<PlaylistItem>) {
+    fn process_track_items(&mut self, items: Vec<PlaylistItem>, verbose: bool) {
         for item in items {
             if let Some(track) = item.track {
                 if let Some(track_id) = track.id {
@@ -199,11 +207,13 @@ impl SpotifyPlaylist {
                     );
 
                     self.tracks.insert(track_id, spotify_track);
-                    println!(
-                        "Adding {} by {} to the playlist data",
-                        track.name.yellow(),
-                        artists_string.cyan()
-                    );
+                    if verbose {
+                        println!(
+                            "Adding {} by {} to the playlist data",
+                            track.name.yellow(),
+                            artists_string.cyan()
+                        );
+                    }
                 } else {
                     println!(
                         "Skipping track '{}' because it has no ID (it might be a local file).",
