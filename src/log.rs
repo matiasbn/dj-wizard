@@ -8,10 +8,10 @@ use std::{fmt, fs};
 use crate::url_list::UrlListCRUD;
 use crate::DjWizardError;
 use colored::Colorize;
-use error_stack::{IntoReport, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::{de::Error, Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::soundeo::track::SoundeoTrack;
@@ -31,10 +31,25 @@ impl std::error::Error for DjWizardLogError {}
 
 pub type DjWizardLogResult<T> = error_stack::Result<T, DjWizardLogError>;
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    High,
+    Normal,
+    Low,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QueuedTrack {
+    pub track_id: String,
+    pub priority: Priority,
+    pub order_key: f64,
+    pub added_at: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DjWizardLog {
     pub last_update: u64,
-    pub queued_tracks: HashSet<String>,
+    pub queued_tracks: Vec<QueuedTrack>,
     #[serde(default)]
     pub available_tracks: HashSet<String>,
     #[serde(default)]
@@ -44,7 +59,7 @@ pub struct DjWizardLog {
 }
 
 impl DjWizardLog {
-    pub fn get_queued_tracks() -> DjWizardLogResult<HashSet<String>> {
+    pub fn get_queued_tracks() -> DjWizardLogResult<Vec<QueuedTrack>> {
         let log = Self::read_log()?;
         Ok(log.queued_tracks)
     }
@@ -74,18 +89,79 @@ impl DjWizardLog {
         let soundeo_log_path = Self::get_log_path(&soundeo_user);
         let soundeo_log_file_path = Path::new(&soundeo_log_path);
         let soundeo_log: Self = if soundeo_log_file_path.is_file() {
-            let soundeo_log: Self = serde_json::from_str(
-                &read_to_string(&soundeo_log_file_path)
-                    .into_report()
-                    .change_context(DjWizardLogError)?,
-            )
-            .into_report()
-            .change_context(DjWizardLogError)?;
-            soundeo_log
+            let log_content = read_to_string(&soundeo_log_file_path)
+                .into_report()
+                .change_context(DjWizardLogError)?;
+
+            // Attempt to deserialize into the new format first. If it works, we're done.
+            if let Ok(log) = serde_json::from_str::<Self>(&log_content) {
+                return Ok(log);
+            }
+
+            // If that failed, it's likely the old format. Let's try to migrate.
+            println!(
+                "{}",
+                "Old log format detected. Attempting to migrate queue automatically...".yellow()
+            );
+
+            // Use serde_json::Value to inspect the structure without crashing.
+            let mut json_value: Value = serde_json::from_str(&log_content)
+                .into_report()
+                .change_context(DjWizardLogError)?;
+
+            let mut migration_performed = false;
+            // Check if `queued_tracks` is an array of strings (the old format)
+            if let Some(queue_value) = json_value.get_mut("queued_tracks") {
+                if queue_value.is_array()
+                    && queue_value
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|v| v.is_string())
+                {
+                    let old_queue: HashSet<String> = serde_json::from_value(queue_value.clone())
+                        .into_report()
+                        .change_context(DjWizardLogError)?;
+
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .into_report()
+                        .change_context(DjWizardLogError)?
+                        .as_secs();
+
+                    let new_queue: Vec<QueuedTrack> = old_queue
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, track_id)| QueuedTrack {
+                            track_id,
+                            priority: Priority::Normal, // Default priority
+                            order_key: i as f64,        // Preserve some order
+                            added_at: now,
+                        })
+                        .collect();
+
+                    *queue_value = serde_json::to_value(new_queue)
+                        .into_report()
+                        .change_context(DjWizardLogError)?;
+                    migration_performed = true;
+                }
+            }
+
+            let mut log: Self = serde_json::from_value(json_value).into_report().attach_printable("Failed to deserialize log file after attempting migration. The log file might be corrupted.").change_context(DjWizardLogError)?;
+
+            if migration_performed {
+                log.save_log()?;
+                println!(
+                    "{}",
+                    "Migration successful! Your queue has been updated to the new prioritized format."
+                        .green()
+                );
+            }
+            log
         } else {
             Self {
                 last_update: 0,
-                queued_tracks: HashSet::new(),
+                queued_tracks: Vec::new(),
                 soundeo: Soundeo::new(),
                 spotify: Spotify::new(),
                 available_tracks: HashSet::new(),
@@ -111,16 +187,86 @@ impl DjWizardLog {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
     }
 
-    pub fn add_queued_track(track_id: String) -> DjWizardLogResult<bool> {
+    pub fn get_log_path_from_config(user: &User) -> DjWizardLogResult<String> {
+        if user.download_path.is_empty() {
+            return Err(Report::new(DjWizardLogError)
+                .attach_printable("Download path is not set in the configuration."));
+        }
+        Ok(format!("{}/soundeo_log.json", user.download_path))
+    }
+
+    pub fn add_queued_track(track_id: String, priority: Priority) -> DjWizardLogResult<bool> {
         let mut log = Self::read_log()?;
         log.last_update = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let result = log.queued_tracks.insert(track_id);
+
+        if log.queued_tracks.iter().any(|t| t.track_id == track_id) {
+            return Ok(false);
+        }
+
+        let max_order_key_in_group = log
+            .queued_tracks
+            .iter()
+            .filter(|t| t.priority == priority)
+            .map(|t| t.order_key)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let new_track = QueuedTrack {
+            track_id,
+            priority,
+            order_key: if max_order_key_in_group.is_finite() {
+                max_order_key_in_group + 1.0
+            } else {
+                1.0
+            },
+            added_at: log.last_update,
+        };
+        log.queued_tracks.push(new_track);
         log.save_log()?;
-        Ok(result)
+        Ok(true)
+    }
+
+    pub fn promote_tracks_to_top(track_ids_to_promote: &[String]) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+
+        // 1. Find the lowest (most priority) order_key among existing High priority tracks.
+        let min_high_priority_key = log
+            .queued_tracks
+            .iter()
+            .filter(|t| t.priority == Priority::High)
+            .map(|t| t.order_key)
+            .fold(f64::INFINITY, f64::min);
+
+        // 2. Determine the starting point for the new order_keys.
+        // If no 'High' tracks exist, we can start from 0. Otherwise, start below the current minimum.
+        let mut next_order_key = if min_high_priority_key.is_finite() {
+            min_high_priority_key - 1.0
+        } else {
+            0.0
+        };
+
+        // 3. Update the selected tracks.
+        for track in log.queued_tracks.iter_mut() {
+            if track_ids_to_promote.contains(&track.track_id) {
+                track.priority = Priority::High;
+                track.order_key = next_order_key;
+                next_order_key -= 1.0; // Each subsequent promoted track gets an even lower key.
+            }
+        }
+
+        log.save_log()?;
+        println!(
+            "{}",
+            format!(
+                "{} tracks have been moved to the top of the queue.",
+                track_ids_to_promote.len()
+            )
+            .green()
+        );
+        Ok(())
     }
 
     pub fn remove_queued_track(track_id: String) -> DjWizardLogResult<bool> {
@@ -130,9 +276,13 @@ impl DjWizardLog {
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
-        let result = log.queued_tracks.remove(&track_id);
-        log.save_log()?;
-        Ok(result)
+        let initial_len = log.queued_tracks.len();
+        log.queued_tracks.retain(|t| t.track_id != track_id);
+        let was_removed = log.queued_tracks.len() < initial_len;
+        if was_removed {
+            log.save_log()?;
+        }
+        Ok(was_removed)
     }
 
     pub fn add_available_track(track_id: String) -> DjWizardLogResult<bool> {
@@ -209,6 +359,20 @@ impl DjWizardLog {
         );
         Ok(())
     }
+
+    pub fn update_spotify_soundeo_pairs(
+        new_pairs: &HashMap<String, Option<String>>,
+    ) -> DjWizardLogResult<()> {
+        if new_pairs.is_empty() {
+            return Ok(());
+        }
+        let mut log = Self::read_log()?;
+        log.spotify
+            .soundeo_track_ids
+            .extend(new_pairs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        log.save_log()?;
+        Ok(())
+    }
 }
 
 impl SoundeoCRUD for DjWizardLog {
@@ -257,11 +421,12 @@ impl SoundeoCRUD for DjWizardLog {
 }
 
 impl SpotifyCRUD for DjWizardLog {
-    fn create_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()> {
+    fn update_spotify_playlist(spotify_playlist: SpotifyPlaylist) -> DjWizardLogResult<()> {
         let mut log = Self::read_log()?;
+        // Using insert will either add a new playlist or update an existing one.
         log.spotify.playlists.insert(
             spotify_playlist.spotify_playlist_id.clone(),
-            spotify_playlist.clone(),
+            spotify_playlist,
         );
         log.save_log()?;
         Ok(())
@@ -276,6 +441,22 @@ impl SpotifyCRUD for DjWizardLog {
             .soundeo_track_ids
             .insert(spotify_track_id, soundeo_track_id.clone());
         log.save_log()?;
+        Ok(())
+    }
+
+    fn delete_spotify_playlists(playlist_ids: &[String]) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        let mut deleted_count = 0;
+
+        for id in playlist_ids {
+            if log.spotify.playlists.remove(id).is_some() {
+                deleted_count += 1;
+            }
+        }
+
+        if deleted_count > 0 {
+            log.save_log()?;
+        }
         Ok(())
     }
 }

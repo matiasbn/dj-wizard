@@ -13,6 +13,7 @@ use serde_json::json;
 use url::{Host, Position, Url};
 use url_list::commands::UrlListCommands;
 
+use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
@@ -23,7 +24,9 @@ use crate::spotify::commands::SpotifyCommands;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::user::{SoundeoUser, User};
 
+mod backup;
 mod cleaner;
+mod config;
 mod dialoguer;
 mod errors;
 mod ipfs;
@@ -77,6 +80,8 @@ enum DjWizardCommands {
     Info,
     /// Automatically download tracks from a Spotify playlist
     Spotify,
+    /// Backup the log file to the cloud
+    Backup,
 }
 
 impl DjWizardCommands {
@@ -198,6 +203,11 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
+            DjWizardCommands::Backup => {
+                BackupCommands::execute()
+                    .change_context(DjWizardError)
+                    .await
+            }
         };
     }
 
@@ -226,6 +236,9 @@ impl DjWizardCommands {
             }
             DjWizardCommands::IPFS => {
                 format!("dj-wizard ipfs")
+            }
+            DjWizardCommands::Backup => {
+                format!("dj-wizard backup")
             }
         }
     }

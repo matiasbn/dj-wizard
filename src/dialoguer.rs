@@ -2,7 +2,9 @@ use std::fmt;
 use std::fmt::Write;
 
 use colored::Colorize;
-use dialoguer::{console::Term, theme::ColorfulTheme, Input, MultiSelect, Password, Select};
+use dialoguer::{
+    console::Term, theme::ColorfulTheme, Confirm, Input, MultiSelect, Password, Select,
+};
 use error_stack::{IntoReport, Result, ResultExt};
 
 #[derive(Debug)]
@@ -100,6 +102,25 @@ impl Dialoguer {
             .into_report()?;
 
         Ok(opt == 0)
+    }
+
+    pub fn confirm(prompt_text: String, default: Option<bool>) -> DialoguerResult<bool> {
+        let colorful_theme = &ColorfulTheme::default();
+        let mut confirm = Confirm::with_theme(colorful_theme);
+        let mut dialog = confirm.with_prompt(&prompt_text);
+
+        if let Some(def) = default {
+            dialog = dialog.default(def);
+        }
+
+        let result = dialog
+            .interact_opt()
+            .into_report()
+            .change_context(DialoguerError)?
+            .ok_or(DialoguerError)
+            .into_report()?;
+
+        Ok(result)
     }
 
     pub fn input(prompt_text: String) -> Result<String, DialoguerError> {
