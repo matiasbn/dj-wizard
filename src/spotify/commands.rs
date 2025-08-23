@@ -10,6 +10,7 @@ use tiny_http::{Response, Server};
 use url::Url;
 use webbrowser;
 
+use crate::config::AppConfig;
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::soundeo::track::SoundeoTrack;
@@ -227,7 +228,7 @@ impl SpotifyCommands {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge_bytes);
 
         // --- Standard Auth Flow Steps ---
-        let client_id = "a57ab1ceee1f4094b55924d3e228ae53".to_string();
+        let client_id = AppConfig::SPOTIFY_CLIENT_ID.to_string();
         let redirect_uri = "http://localhost:8888/callback";
         let scopes = "playlist-read-private playlist-read-collaborative";
 

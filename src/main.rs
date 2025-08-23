@@ -26,6 +26,7 @@ use crate::user::{SoundeoUser, User};
 
 mod backup;
 mod cleaner;
+mod config;
 mod dialoguer;
 mod errors;
 mod ipfs;

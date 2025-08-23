@@ -1,36 +1,22 @@
 use crate::user::User;
 use crate::{DjWizardCommands, Suggestion};
-use async_trait::async_trait;
+use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
 use google_drive3::api::{File, Scope};
 use google_drive3::hyper::client::HttpConnector;
 use google_drive3::hyper_rustls::HttpsConnector;
-use google_drive3::oauth2::storage::{TokenInfo, TokenStorage};
 use google_drive3::{hyper, hyper_rustls, oauth2, DriveHub};
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use std::default::Default;
 use std::fs;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex as StdMutex};
+use tiny_http::{Response, Server};
+use url::Url;
+use webbrowser;
 
 use super::{BackupError, BackupResult};
-
-#[derive(Clone, Default)]
-struct EphemeralTokenStorage {
-    token: Arc<StdMutex<Option<TokenInfo>>>,
-}
-
-#[async_trait]
-impl TokenStorage for EphemeralTokenStorage {
-    async fn set(&self, _scopes: &[&str], token: TokenInfo) -> anyhow::Result<()> {
-        *self.token.lock().unwrap() = Some(token);
-        Ok(())
-    }
-
-    async fn get(&self, _scopes: &[&str]) -> Option<TokenInfo> {
-        self.token.lock().unwrap().clone()
-    }
-}
 
 pub struct BackupCommands;
 
@@ -61,15 +47,12 @@ impl BackupCommands {
     }
 
     async fn refresh_google_token(user: &User) -> BackupResult<String> {
-        // Use the same placeholders as the login function.
-        // These credentials are required to refresh the token.
-        let client_id = "YOUR_GOOGLE_CLIENT_ID";
-        let client_secret = "YOUR_GOOGLE_CLIENT_SECRET";
+        // For refreshing a token obtained via PKCE, the client_secret is not needed.
+        let client_id = "YOUR_GOOGLE_CLIENT_ID"; // TODO: Replace with your Google Client ID
 
         let client = reqwest::Client::new();
         let params = [
             ("client_id", client_id),
-            ("client_secret", client_secret),
             ("refresh_token", &user.google_refresh_token),
             ("grant_type", "refresh_token"),
         ];
@@ -105,18 +88,17 @@ impl BackupCommands {
             .into_report()
             .change_context(BackupError)?;
 
-        let hub = DriveHub::new(
-            hyper::Client::builder().build(
-                hyper_rustls::HttpsConnectorBuilder::new()
-                    .with_native_roots()
-                    .into_report()
-                    .change_context(BackupError)?
-                    .https_or_http()
-                    .enable_http1()
-                    .build(),
-            ),
-            auth,
+        let http_client = hyper::Client::builder().build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .into_report()
+                .change_context(BackupError)?
+                .https_or_http()
+                .enable_http1()
+                .build(),
         );
+
+        let hub = DriveHub::new(http_client, auth);
         Ok(hub)
     }
 
@@ -180,45 +162,101 @@ impl BackupCommands {
     }
 
     async fn perform_google_login() -> BackupResult<String> {
-        // TODO: Replace these placeholder values with your own credentials from the Google Cloud Console.
-        let client_id = "YOUR_GOOGLE_CLIENT_ID";
-        let client_secret = "YOUR_GOOGLE_CLIENT_SECRET";
+        // --- PKCE Step 1: Create a Code Verifier and Code Challenge ---
+        let mut verifier_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut verifier_bytes);
+        let code_verifier =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&verifier_bytes);
 
-        let secret = oauth2::ApplicationSecret {
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            token_uri: "https://oauth2.googleapis.com/token".to_string(),
-            auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-            redirect_uris: vec!["http://localhost:8889/callback".to_string()],
-            ..Default::default()
-        };
+        let mut hasher = Sha256::new();
+        hasher.update(code_verifier.as_bytes());
+        let challenge_bytes = hasher.finalize();
+        let code_challenge =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge_bytes);
 
-        let storage = EphemeralTokenStorage::default();
+        // --- Standard Auth Flow Steps ---
+        let client_id = "48225261965-t4hfd2n53gtl9qvj9sqh03vtobv5dboh.apps.googleusercontent.com";
+        let redirect_uri = "http://localhost:8889/callback";
+        let scopes = "https://www.googleapis.com/auth/drive.file";
 
-        let auth = oauth2::InstalledFlowAuthenticator::builder(
-            secret,
-            oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-        )
-        .with_storage(Box::new(storage.clone()))
-        .build()
-        .await
-        .into_report()
-        .change_context(BackupError)?;
+        // 2. Start a temporary local server to catch the redirect
+        let server = Server::http("127.0.0.1:8889").unwrap();
 
-        let scopes = &[Scope::File.as_ref()];
-        auth.token(scopes)
+        // 3. Construct the authorization URL with PKCE params
+        let auth_url = format!(
+            "https://accounts.google.com/o/oauth2/v2/auth?scope={}&response_type=code&redirect_uri={}&client_id={}&code_challenge={}&code_challenge_method=S256",
+            scopes, redirect_uri, client_id, code_challenge
+        );
+
+        println!(
+            "\n{}\n",
+            "Please log in to Google in the browser window that just opened.".yellow()
+        );
+        if webbrowser::open(&auth_url).is_err() {
+            println!(
+                "Could not automatically open browser. Please copy/paste this URL:\n{}",
+                auth_url.cyan()
+            );
+        }
+
+        // 4. Wait for the user to log in and for Google to redirect back to our server
+        let request = server.recv().into_report().change_context(BackupError)?;
+        let full_url = format!("http://localhost:8889{}", request.url());
+        let parsed_url = Url::parse(&full_url)
+            .into_report()
+            .change_context(BackupError)?;
+        let auth_code = parsed_url
+            .query_pairs()
+            .find_map(|(key, value)| {
+                if key == "code" {
+                    Some(value.into_owned())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                Report::new(BackupError).attach_printable("Could not find 'code' in callback URL")
+            })?;
+
+        let response = Response::from_string(
+            "<h1>Authentication successful!</h1><p>You can close this browser tab now.</p>",
+        );
+        request
+            .respond(response)
+            .into_report()
+            .change_context(BackupError)?;
+        println!("\nAuthorization code received successfully!");
+
+        // 5. Exchange the code for a token, sending the original code_verifier
+        let client = reqwest::Client::new();
+        let params = [
+            ("client_id", client_id.to_string()),
+            ("code", auth_code),
+            ("code_verifier", code_verifier),
+            ("grant_type", "authorization_code".to_string()),
+            ("redirect_uri", redirect_uri.to_string()),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(BackupError)?
+            .json()
             .await
             .into_report()
             .change_context(BackupError)?;
 
-        let token_info = storage.get(scopes).await.ok_or_else(|| {
-            Report::new(BackupError).attach_printable("Failed to retrieve token after login flow.")
-        })?;
-
-        token_info.refresh_token.ok_or_else(|| {
-            Report::new(BackupError).attach_printable(
-                "Google did not provide a refresh token. Please try logging in again.",
-            )
-        })
+        // 6. Extract and return the refresh token
+        token_response["refresh_token"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                Report::new(BackupError).attach_printable(format!(
+                    "Google did not provide a refresh token. Please try logging in again.",
+                ))
+            })
     }
 }
