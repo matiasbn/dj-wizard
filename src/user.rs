@@ -39,8 +39,11 @@ pub struct User {
     pub soundeo_user: String,
     pub soundeo_pass: String,
     pub download_path: String,
+    #[serde(default)]
     pub ipfs: IPFSConfig,
+    #[serde(default)]
     pub spotify_access_token: String,
+    #[serde(default)]
     pub spotify_refresh_token: String,
 }
 

@@ -232,9 +232,7 @@ impl SpotifyCommands {
         let scopes = "playlist-read-private playlist-read-collaborative";
 
         // 2. Start a temporary local server to catch the redirect
-        let server = Server::http("127.0.0.1:8888")
-            .into_report()
-            .change_context(SpotifyError)?;
+        let server = Server::http("127.0.0.1:8888").unwrap();
 
         // 3. Construct the authorization URL and open it in the browser
         let auth_url = format!(
