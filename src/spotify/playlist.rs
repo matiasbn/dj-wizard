@@ -3,6 +3,7 @@ use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
+use crate::log::Priority;
 use crate::Suggestion;
 use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
@@ -273,9 +274,20 @@ impl SpotifyPlaylist {
                     );
                     DjWizardLog::update_spotify_to_soundeo_track(
                         spotify_track_id,
-                        Some(soundeo_id),
+                        Some(soundeo_id.clone()),
                     )
                     .change_context(SpotifyError)?;
+
+                    if DjWizardLog::add_queued_track(soundeo_id, Priority::Normal)
+                        .change_context(SpotifyError)?
+                    {
+                        println!(
+                            "    └─ Added to download queue with {} priority.",
+                            "Normal".cyan()
+                        );
+                    } else {
+                        println!("    └─ Already in download queue.");
+                    }
                 }
             }
             println!(
@@ -296,8 +308,23 @@ impl SpotifyPlaylist {
                     spotify_track.artists.yellow()
                 );
                 let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-                DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_track_id)
-                    .change_context(SpotifyError)?;
+                DjWizardLog::update_spotify_to_soundeo_track(
+                    spotify_track_id,
+                    soundeo_track_id.clone(),
+                )
+                .change_context(SpotifyError)?;
+                if let Some(id) = soundeo_track_id {
+                    if DjWizardLog::add_queued_track(id, Priority::Normal)
+                        .change_context(SpotifyError)?
+                    {
+                        println!(
+                            "    └─ Added to download queue with {} priority.",
+                            "Normal".cyan()
+                        );
+                    } else {
+                        println!("    └─ Already in download queue.");
+                    }
+                }
             }
         }
 

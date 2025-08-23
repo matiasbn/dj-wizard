@@ -13,7 +13,7 @@ use webbrowser;
 use crate::config::AppConfig;
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
-use crate::soundeo::track::SoundeoTrack;
+use crate::log::Priority;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::{SoundeoUser, User};
@@ -43,9 +43,10 @@ struct PaginatedPlaylistsResponse {
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
     SyncPublicPlaylists,
-    DownloadTracksFromPlaylist,
+    PairAndQueueUnpairedTracks,
     AddNewPlaylistFromUrl,
     UpdatePlaylist,
+    QueueTracksFromPlaylist,
     PrintDownloadedTracksByPlaylist,
     DeletePlaylists,
     CountQueuedTracksByPlaylist,
@@ -87,7 +88,10 @@ impl SpotifyCommands {
             SpotifyCommands::SyncPublicPlaylists => {
                 Self::sync_public_playlists(&mut user_config).await
             }
-            SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
+            SpotifyCommands::PairAndQueueUnpairedTracks => {
+                Self::pair_and_queue_unpaired_tracks().await
+            }
+            SpotifyCommands::QueueTracksFromPlaylist => Self::queue_tracks_from_playlist().await,
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
             }
@@ -344,7 +348,7 @@ impl SpotifyCommands {
         Ok(())
     }
 
-    async fn download_from_playlist() -> SpotifyResult<()> {
+    async fn pair_and_queue_unpaired_tracks() -> SpotifyResult<()> {
         let mut playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
@@ -353,11 +357,24 @@ impl SpotifyCommands {
             .await
             .change_context(SpotifyError)?;
 
-        // Ensure all tracks are paired before proceeding.
+        // This function now pairs and, upon successful pairing, queues the tracks.
         playlist
             .pair_unpaired_tracks(&mut soundeo_user)
             .await
             .change_context(SpotifyError)?;
+
+        println!(
+            "{}",
+            "Pairing and queueing for unpaired tracks in the playlist is complete.".green()
+        );
+        Ok(())
+    }
+
+    async fn queue_tracks_from_playlist() -> SpotifyResult<()> {
+        let playlist =
+            SpotifyPlaylist::prompt_select_playlist("Select the playlist to queue tracks from")?;
+
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         let soundeo_ids: Vec<String> = playlist
@@ -371,23 +388,57 @@ impl SpotifyCommands {
         if soundeo_ids.is_empty() {
             println!(
                 "{}",
-                "No downloadable tracks found for this playlist after pairing.".yellow()
+                "No paired tracks found for this playlist. Please pair them first.".yellow()
             );
             return Ok(());
         }
 
         println!(
-            "Found {} matched tracks. Starting download...",
-            soundeo_ids.len()
+            "Found {} paired tracks in playlist '{}'.",
+            soundeo_ids.len(),
+            playlist.name.cyan()
         );
 
-        for soundeo_track_id in soundeo_ids {
-            let mut track = SoundeoTrack::new(soundeo_track_id);
-            track
-                .download_track(&mut soundeo_user, true)
-                .await
-                .change_context(SpotifyError)?;
+        let priority_options = vec!["High (download first)", "Normal", "Low (download last)"];
+        let selection = Dialoguer::select(
+            "Choose a priority for these tracks".to_string(),
+            priority_options,
+            Some(1), // "Normal" as default
+        )
+        .change_context(SpotifyError)?;
+
+        let selected_priority = match selection {
+            0 => Priority::High,
+            1 => Priority::Normal,
+            _ => Priority::Low,
+        };
+
+        let mut queued_count = 0;
+        let mut skipped_count = 0;
+        for soundeo_id in soundeo_ids {
+            if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
+                .change_context(SpotifyError)?
+            {
+                queued_count += 1;
+            } else {
+                skipped_count += 1;
+            }
         }
+
+        if queued_count > 0 {
+            println!(
+                "Successfully queued {} new tracks with {} priority.",
+                queued_count.to_string().green(),
+                format!("{:?}", selected_priority).cyan()
+            );
+        }
+        if skipped_count > 0 {
+            println!(
+                "Skipped {} tracks that were already in the queue.",
+                skipped_count.to_string().yellow()
+            );
+        }
+
         Ok(())
     }
 
