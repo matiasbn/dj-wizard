@@ -223,43 +223,62 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // This test is interactive and requires manual user login via a browser.
-    async fn test_authorization_code_flow() {
+    #[ignore] // This test is interactive and requires manual user login. Run with `cargo test -- --ignored`
+    async fn test_authorization_code_flow_with_pkce() {
+        use rand::RngCore;
+        use sha2::{Digest, Sha256};
         use tiny_http::{Response, Server};
         use webbrowser;
 
-        // 1. Load credentials and configuration from .env file
+        // --- PKCE Step 1: Create a Code Verifier and Code Challenge ---
+        // In a real app, you'd create these for each login attempt.
+
+        // Create a random 32-byte string for the verifier.
+        let mut verifier_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut verifier_bytes);
+        // Encode it using URL-safe base64. This is the "key".
+        let code_verifier =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&verifier_bytes);
+
+        // Create the challenge by SHA256-hashing the verifier.
+        let mut hasher = Sha256::new();
+        hasher.update(code_verifier.as_bytes());
+        let challenge_bytes = hasher.finalize();
+        // The challenge is also encoded in URL-safe base64.
+        let code_challenge =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(challenge_bytes);
+
+        // --- Standard Auth Flow Steps ---
+
+        // 1. Load configuration. Note that SPOTIFY_CLIENT_SECRET is no longer needed.
+        // In a real distributed app, the client_id would be hardcoded, not from a .env file.
         dotenv().ok();
         let client_id =
             env::var("SPOTIFY_CLIENT_ID").expect("SPOTIFY_CLIENT_ID must be set in .env");
-        let client_secret =
-            env::var("SPOTIFY_CLIENT_SECRET").expect("SPOTIFY_CLIENT_SECRET must be set in .env");
         let redirect_uri = "http://localhost:8888/callback";
         let scopes = "playlist-read-private playlist-read-collaborative";
 
         // 2. Start a temporary local server to catch the redirect
         let server = Server::http("127.0.0.1:8888").unwrap();
-        println!("Local server started at http://127.0.0.1:8888");
 
-        // 3. Construct the authorization URL and open it in the browser
+        // 3. Construct the authorization URL, now including the PKCE parameters.
         let auth_url = format!(
-            "https://accounts.spotify.com/authorize?response_type=code&client_id={}&scope={}&redirect_uri={}",
+            "https://accounts.spotify.com/authorize?response_type=code&client_id={}&scope={}&redirect_uri={}&code_challenge_method=S256&code_challenge={}",
             client_id,
             scopes.replace(' ', "%20"), // URL encode scopes
-            redirect_uri
+            redirect_uri,
+            code_challenge
         );
 
         println!(
             "\n{}\n",
             "Please log in to Spotify in the browser window that just opened.".yellow()
         );
-        println!(
-            "If it didn't open, please copy and paste this URL into your browser:\n{}",
-            auth_url.cyan()
-        );
-
         if webbrowser::open(&auth_url).is_err() {
-            println!("Could not automatically open browser.");
+            println!(
+                "Could not automatically open browser. Please copy/paste this URL:\n{}",
+                auth_url.cyan()
+            );
         }
 
         // 4. Wait for the user to log in and for Spotify to redirect back to our server
@@ -286,20 +305,19 @@ mod tests {
         request.respond(response).unwrap();
         println!("\nAuthorization code received successfully!");
 
-        // 5. Exchange the authorization code for an access token and refresh token
+        // 5. Exchange the code for a token, sending the original code_verifier.
+        // Note: No "Authorization: Basic" header is used.
         let client = reqwest::Client::new();
-        let auth_string = format!("{}:{}", client_id, client_secret);
-        let encoded_auth = general_purpose::STANDARD.encode(auth_string);
-
         let params = [
-            ("grant_type", "authorization_code"),
-            ("code", &auth_code),
-            ("redirect_uri", redirect_uri),
+            ("grant_type", "authorization_code".to_string()),
+            ("code", auth_code),
+            ("redirect_uri", redirect_uri.to_string()),
+            ("client_id", client_id),
+            ("code_verifier", code_verifier),
         ];
 
         let token_response: serde_json::Value = client
             .post("https://accounts.spotify.com/api/token")
-            .header("Authorization", format!("Basic {}", encoded_auth))
             .form(&params)
             .send()
             .await
