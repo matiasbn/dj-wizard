@@ -3,7 +3,6 @@ use std::path::Path;
 use std::{env, fmt, fs, string};
 
 use colored::Colorize;
-use colorize::AnsiColor;
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use headless_chrome::protocol::cdp::Runtime::ConsoleAPICalledEventTypeOption::Dir;
 use headless_chrome::Browser;
@@ -11,9 +10,10 @@ use lazy_regex::regex;
 use reqwest::{Client, Response};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::time::{sleep, Duration};
 
+use crate::config::AppConfig;
 use crate::{DjWizardCommands, Suggestion};
 
 #[derive(Debug, Clone)]
@@ -148,6 +148,52 @@ impl User {
             .attach_printable(format!("Failed to write config file at {}", log_path))
             .change_context(SoundeoUserError)?;
         Ok(())
+    }
+
+    pub async fn refresh_spotify_token(&mut self) -> SoundeoUserResult<()> {
+        println!("Spotify access token expired. Attempting to refresh...");
+
+        if self.spotify_refresh_token.is_empty() {
+            return Err(Report::new(SoundeoUserError)
+                .attach_printable("No refresh token available. Please log in again."));
+        }
+
+        let client_id = AppConfig::SPOTIFY_CLIENT_ID.to_string();
+        let client = reqwest::Client::new();
+        let params = [
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", self.spotify_refresh_token.clone()),
+            ("client_id", client_id),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://accounts.spotify.com/api/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(SoundeoUserError)?
+            .json()
+            .await
+            .into_report()
+            .change_context(SoundeoUserError)?;
+
+        if let Some(new_access_token) = token_response["access_token"].as_str() {
+            self.spotify_access_token = new_access_token.to_string();
+
+            if let Some(new_refresh_token) = token_response["refresh_token"].as_str() {
+                self.spotify_refresh_token = new_refresh_token.to_string();
+            }
+
+            self.save_config_file()?;
+            println!("{}", "Spotify token refreshed successfully.".green());
+            Ok(())
+        } else {
+            Err(Report::new(SoundeoUserError).attach_printable(format!(
+                "Failed to refresh Spotify token. Response: {:?}",
+                token_response
+            )))
+        }
     }
 }
 

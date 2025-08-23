@@ -12,6 +12,7 @@ use url::Url;
 
 use crate::spotify::track::SpotifyTrack;
 use crate::spotify::{SpotifyError, SpotifyResult};
+use crate::user::User;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct TokenResponse {
@@ -80,8 +81,8 @@ impl SpotifyPlaylist {
     ///
     /// This function requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to be set
     /// in a `.env` file in the project root. It uses the Client Credentials Flow to
-    /// authenticate with the Spotify API. This function uses a user-provided access token to authenticate with the Spotify API.
-    pub async fn get_playlist_info(&mut self, access_token: &str) -> SpotifyResult<()> {
+    /// authenticate with the Spotify API.
+    pub async fn get_playlist_info(&mut self, user_config: &mut User) -> SpotifyResult<()> {
         println!("Getting playlist info from Spotify API...");
 
         let client = reqwest::Client::new();
@@ -92,13 +93,38 @@ impl SpotifyPlaylist {
             self.spotify_playlist_id
         );
 
-        let mut api_playlist: ApiPlaylist = client
+        let mut response = client
             .get(&playlist_url)
-            .bearer_auth(access_token)
+            .bearer_auth(&user_config.spotify_access_token)
             .send()
             .await
             .into_report()
-            .change_context(SpotifyError)?
+            .change_context(SpotifyError)?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            user_config
+                .refresh_spotify_token()
+                .await
+                .change_context(SpotifyError)?;
+            response = client
+                .get(&playlist_url)
+                .bearer_auth(&user_config.spotify_access_token)
+                .send()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
+        }
+
+        if !response.status().is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error body".to_string());
+            return Err(Report::new(SpotifyError)
+                .attach_printable(format!("Spotify API returned an error: {}", error_body)));
+        }
+
+        let mut api_playlist: ApiPlaylist = response
             .json::<ApiPlaylist>()
             .await
             .into_report()
@@ -114,13 +140,38 @@ impl SpotifyPlaylist {
         self.process_track_items(api_playlist.tracks.items);
 
         while let Some(url) = next_url {
-            let paginated_response: PlaylistTracks = client
+            let mut paginated_response_raw = client
                 .get(&url)
-                .bearer_auth(access_token)
+                .bearer_auth(&user_config.spotify_access_token)
                 .send()
                 .await
                 .into_report()
-                .change_context(SpotifyError)?
+                .change_context(SpotifyError)?;
+
+            if paginated_response_raw.status() == reqwest::StatusCode::UNAUTHORIZED {
+                user_config
+                    .refresh_spotify_token()
+                    .await
+                    .change_context(SpotifyError)?;
+                paginated_response_raw = client
+                    .get(&url)
+                    .bearer_auth(&user_config.spotify_access_token)
+                    .send()
+                    .await
+                    .into_report()
+                    .change_context(SpotifyError)?;
+            }
+
+            if !paginated_response_raw.status().is_success() {
+                let error_body = paginated_response_raw
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                return Err(Report::new(SpotifyError)
+                    .attach_printable(format!("Spotify API returned an error: {}", error_body)));
+            }
+
+            let paginated_response: PlaylistTracks = paginated_response_raw
                 .json::<PlaylistTracks>()
                 .await
                 .into_report()

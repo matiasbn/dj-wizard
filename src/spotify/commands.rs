@@ -78,9 +78,13 @@ impl SpotifyCommands {
         let selection =
             Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
         return match Self::get_selection(selection) {
-            SpotifyCommands::AddNewPlaylistFromUrl => Self::add_new_playlist(&user_config).await,
-            SpotifyCommands::UpdatePlaylist => Self::update_playlist(&user_config).await,
-            SpotifyCommands::SyncPublicPlaylists => Self::sync_public_playlists(&user_config).await,
+            SpotifyCommands::AddNewPlaylistFromUrl => {
+                Self::add_new_playlist(&mut user_config).await
+            }
+            SpotifyCommands::UpdatePlaylist => Self::update_playlist(&mut user_config).await,
+            SpotifyCommands::SyncPublicPlaylists => {
+                Self::sync_public_playlists(&mut user_config).await
+            }
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
@@ -99,7 +103,7 @@ impl SpotifyCommands {
         options[selection].clone()
     }
 
-    async fn add_new_playlist(user_config: &User) -> SpotifyResult<()> {
+    async fn add_new_playlist(user_config: &mut User) -> SpotifyResult<()> {
         let prompt_text = format!("Spotify playlist url: ");
         let url = Dialoguer::input(prompt_text).change_context(SpotifyError)?;
         let playlist_url = Url::parse(&url)
@@ -127,7 +131,7 @@ impl SpotifyCommands {
             }
             None => {
                 playlist
-                    .get_playlist_info(&user_config.spotify_access_token)
+                    .get_playlist_info(user_config)
                     .await
                     .change_context(SpotifyError)?;
                 DjWizardLog::create_spotify_playlist(playlist.clone())
@@ -141,11 +145,11 @@ impl SpotifyCommands {
         };
     }
 
-    async fn update_playlist(user_config: &User) -> SpotifyResult<()> {
+    async fn update_playlist(user_config: &mut User) -> SpotifyResult<()> {
         let mut playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         playlist
-            .get_playlist_info(&user_config.spotify_access_token)
+            .get_playlist_info(user_config)
             .await
             .change_context(SpotifyError)?;
         DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
@@ -156,20 +160,34 @@ impl SpotifyCommands {
         Ok(())
     }
 
-    async fn sync_public_playlists(user_config: &User) -> SpotifyResult<()> {
+    async fn sync_public_playlists(user_config: &mut User) -> SpotifyResult<()> {
         println!("Fetching your public playlists from Spotify...");
         let client = reqwest::Client::new();
         let mut all_playlists: Vec<ApiSimplePlaylist> = Vec::new();
         let mut next_url = Some("https://api.spotify.com/v1/me/playlists".to_string());
 
         while let Some(url) = next_url {
-            let response = client
+            let mut response = client
                 .get(&url)
                 .bearer_auth(&user_config.spotify_access_token)
                 .send()
                 .await
                 .into_report()
                 .change_context(SpotifyError)?;
+
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                user_config
+                    .refresh_spotify_token()
+                    .await
+                    .change_context(SpotifyError)?;
+                response = client
+                    .get(&url)
+                    .bearer_auth(&user_config.spotify_access_token)
+                    .send()
+                    .await
+                    .into_report()
+                    .change_context(SpotifyError)?;
+            }
 
             if !response.status().is_success() {
                 let error_body = response
@@ -179,7 +197,7 @@ impl SpotifyCommands {
                 return Err(Report::new(SpotifyError)
                     .attach_printable(format!("Spotify API returned an error: {}", error_body))
                     .attach(Suggestion(
-                        "Your access token might have expired. Please log in again.".to_string(),
+                        "Your refresh token might be invalid. Please log in again.".to_string(),
                     )));
             }
 
@@ -212,7 +230,7 @@ impl SpotifyCommands {
             let mut playlist = SpotifyPlaylist::new(playlist_url).change_context(SpotifyError)?;
 
             playlist
-                .get_playlist_info(&user_config.spotify_access_token)
+                .get_playlist_info(user_config)
                 .await
                 .change_context(SpotifyError)?;
 
