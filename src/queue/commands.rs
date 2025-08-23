@@ -315,7 +315,7 @@ impl QueueCommands {
         Ok(())
     }
 
-    async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
+    pub async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
         // If the resume queue flag is provided, skip the dialog to filter by genre
         // since we need complete automation
         let filtered_by_genre = if resume_queue_flag {
