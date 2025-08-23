@@ -650,11 +650,59 @@ impl QueueCommands {
     }
 
     async fn prioritize_by_spotify_playlist() -> QueueResult<()> {
-        let playlist =
+        let mut playlist =
             SpotifyPlaylist::prompt_select_playlist("Select a Spotify playlist to prioritize")
                 .change_context(QueueError)?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(QueueError)?;
+
+        // 1. Check for unpaired tracks
+        let unpaired_track_ids: Vec<String> = playlist
+            .tracks
+            .keys()
+            .filter(|spotify_id| !spotify_log.soundeo_track_ids.contains_key(*spotify_id))
+            .cloned()
+            .collect();
+
+        let mut pair_tracks = true;
+        if !unpaired_track_ids.is_empty() {
+            println!(
+                "The playlist '{}' has {} unpaired tracks.",
+                playlist.name.yellow(),
+                unpaired_track_ids.len().to_string().yellow()
+            );
+            let options = vec![
+                "Yes, pair them now and prioritize all tracks",
+                "No, prioritize only the already-paired tracks",
+            ];
+            let selection = Dialoguer::select(
+                "Do you want to find the Soundeo equivalent for these tracks first?".to_string(),
+                options,
+                Some(0),
+            )
+            .change_context(QueueError)?;
+
+            if selection == 1 {
+                pair_tracks = false;
+            }
+        }
+
+        if pair_tracks && !unpaired_track_ids.is_empty() {
+            println!("Logging into Soundeo to pair tracks...");
+            let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
+            soundeo_user
+                .login_and_update_user_info()
+                .await
+                .change_context(QueueError)?;
+
+            playlist
+                .pair_unpaired_tracks(&mut soundeo_user)
+                .await
+                .change_context(QueueError)?;
+        }
+
+        // Refetch the log to get the latest pairings
+        let final_spotify_log = DjWizardLog::get_spotify().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
         let queued_track_ids: HashSet<String> =
             queued_tracks.iter().map(|t| t.track_id.clone()).collect();
@@ -662,7 +710,7 @@ impl QueueCommands {
         let track_ids_to_promote: Vec<String> = playlist
             .tracks
             .keys() // These are spotify_track_ids
-            .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
+            .filter_map(|spotify_id| final_spotify_log.soundeo_track_ids.get(spotify_id))
             .filter_map(|soundeo_id_option| soundeo_id_option.as_ref())
             .filter(|soundeo_id| queued_track_ids.contains(*soundeo_id))
             .cloned()

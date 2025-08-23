@@ -253,7 +253,7 @@ impl SpotifyPlaylist {
             println!(
                 "Pairing track {}/{}: {}",
                 i + 1,
-                unpaired_tracks.clone().len(),
+                unpaired_tracks.len(),
                 spotify_track.title.cyan()
             );
             let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
