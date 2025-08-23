@@ -6,3 +6,6 @@ config.json
 auto.plist
 auto.md
 auto.sh
+spotify_playlist
+comp.sh
+comperr.log

@@ -1,21 +1,31 @@
 use std::collections::HashMap;
-use std::time::Duration;
+use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
+use crate::log::Priority;
+use crate::Suggestion;
+use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
-use colorize::AnsiColor;
-use error_stack::{FutureExt, IntoReport, Report, ResultExt};
-use headless_chrome::protocol::cdp::Target::CreateTarget;
-use headless_chrome::types::Bounds;
-use headless_chrome::util::Timeout;
-use headless_chrome::{Browser, LaunchOptions};
-use scraper::Selector;
+use dotenvy::dotenv;
+use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::spotify::track::AutoPairResult;
 use crate::spotify::track::SpotifyTrack;
-use crate::spotify::{SpotifyError, SpotifyResult};
+use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
+use crate::user::{SoundeoUser, User};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct TokenResponse {
+    access_token: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiArtist {
+    name: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpotifyPlaylist {
@@ -23,6 +33,30 @@ pub struct SpotifyPlaylist {
     pub spotify_playlist_id: String,
     pub url: String,
     pub tracks: HashMap<String, SpotifyTrack>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiTrack {
+    id: Option<String>,
+    name: String,
+    artists: Vec<ApiArtist>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PlaylistItem {
+    track: Option<ApiTrack>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PlaylistTracks {
+    items: Vec<PlaylistItem>,
+    next: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ApiPlaylist {
+    name: String,
+    tracks: PlaylistTracks,
 }
 
 impl SpotifyPlaylist {
@@ -46,93 +80,283 @@ impl SpotifyPlaylist {
         })
     }
 
-    pub async fn get_playlist_info(&mut self) -> SpotifyResult<()> {
-        let launch_options = LaunchOptions {
-            idle_browser_timeout: Duration::from_secs(30000),
-            ..Default::default()
-        };
-        let browser = Browser::new(launch_options)
-            .ok()
-            .ok_or(SpotifyError)
-            .into_report()
-            .change_context(SpotifyError)?;
-
-        let tab = browser
-            .new_tab_with_options(CreateTarget {
-                url: self.url.clone(),
-                width: Some(2000),
-                height: Some(9999),
-                browser_context_id: None,
-                enable_begin_frame_control: Some(false),
-                new_window: None,
-                background: None,
-                for_tab: None,
-            })
-            .ok()
-            .ok_or(SpotifyError)
-            .into_report()
-            .change_context(SpotifyError)?;
-
-        println!("Loading the playlist...");
-        std::thread::sleep(std::time::Duration::from_secs(20));
-
-        println!("Getting the playlist name...");
-        let name_element = tab
-            .find_element("h1.Type__TypeElement-sc-goli3j-0.dYGhLW")
-            .unwrap();
-
-        let name = name_element.get_inner_text().unwrap();
-
-        println!("The playlist name is {}", name.clone().green());
-        self.name = name;
-
-        println!("Getting the playlist tracks...");
-        let tracks = tab
-            .find_elements("div.h4HgbO_Uu1JYg5UGANeQ.wTUruPetkKdWAR1dd6w4")
-            .unwrap();
-        let title_selector = "div.Type__TypeElement-sc-goli3j-0.fZDcWX.t_yrXoUO3qGsJS4Y6iXX.standalone-ellipsis-one-line";
-        let artists_selector = "span.Type__TypeElement-sc-goli3j-0.bDHxRN.rq2VQ5mb9SDAFWbBIUIn.standalone-ellipsis-one-line";
-        let track_id_selector = "a.t_yrXoUO3qGsJS4Y6iXX";
-        for element in tracks {
-            let title = element
-                .find_element(title_selector)
-                .unwrap()
-                .get_inner_text()
-                .unwrap();
-            let spotify_track_id = element
-                .find_element(track_id_selector)
-                .unwrap()
-                .get_attributes()
-                .unwrap()
-                .unwrap()[7]
-                .clone()
-                .trim_start_matches("/track/")
-                .to_string();
-            let artists = element
-                .find_element(artists_selector)
-                .unwrap()
-                .get_inner_text()
-                .unwrap();
-            self.tracks.insert(
-                spotify_track_id.clone(),
-                SpotifyTrack::new(title.clone(), artists.clone(), spotify_track_id.clone()),
-            );
-            println!(
-                "Adding {} by {} to the playlist data",
-                title.clone().yellow(),
-                artists.clone().cyan()
-            );
+    /// Fetches playlist information (name and tracks) from the Spotify API.
+    ///
+    /// This function requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` to be set
+    /// in a `.env` file in the project root. It uses the Client Credentials Flow to
+    /// authenticate with the Spotify API.
+    pub async fn get_playlist_info(
+        &mut self,
+        user_config: &mut User,
+        verbose: bool,
+    ) -> SpotifyResult<()> {
+        if verbose {
+            println!("Getting playlist info from Spotify API...");
         }
+
+        let client = reqwest::Client::new();
+
+        // --- Get Playlist Info (first page) ---
+        let playlist_url = format!(
+            "https://api.spotify.com/v1/playlists/{}",
+            self.spotify_playlist_id
+        );
+
+        let mut response = client
+            .get(&playlist_url)
+            .bearer_auth(&user_config.spotify_access_token)
+            .send()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            user_config
+                .refresh_spotify_token()
+                .await
+                .change_context(SpotifyError)?;
+            response = client
+                .get(&playlist_url)
+                .bearer_auth(&user_config.spotify_access_token)
+                .send()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
+        }
+
+        if !response.status().is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read error body".to_string());
+            return Err(Report::new(SpotifyError)
+                .attach_printable(format!("Spotify API returned an error: {}", error_body)));
+        }
+
+        let mut api_playlist: ApiPlaylist = response
+            .json::<ApiPlaylist>()
+            .await
+            .into_report()
+            .change_context(SpotifyError)?;
+
+        self.name = api_playlist.name;
+        if verbose {
+            println!("The playlist name is {}", self.name.clone().green());
+        }
+
+        // --- Process tracks and handle pagination ---
+        self.tracks.clear();
+        let mut next_url = api_playlist.tracks.next.take();
+
+        self.process_track_items(api_playlist.tracks.items, verbose);
+
+        while let Some(url) = next_url {
+            let mut paginated_response_raw = client
+                .get(&url)
+                .bearer_auth(&user_config.spotify_access_token)
+                .send()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
+
+            if paginated_response_raw.status() == reqwest::StatusCode::UNAUTHORIZED {
+                user_config
+                    .refresh_spotify_token()
+                    .await
+                    .change_context(SpotifyError)?;
+                paginated_response_raw = client
+                    .get(&url)
+                    .bearer_auth(&user_config.spotify_access_token)
+                    .send()
+                    .await
+                    .into_report()
+                    .change_context(SpotifyError)?;
+            }
+
+            if !paginated_response_raw.status().is_success() {
+                let error_body = paginated_response_raw
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Could not read error body".to_string());
+                return Err(Report::new(SpotifyError)
+                    .attach_printable(format!("Spotify API returned an error: {}", error_body)));
+            }
+
+            let paginated_response: PlaylistTracks = paginated_response_raw
+                .json::<PlaylistTracks>()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
+
+            self.process_track_items(paginated_response.items, verbose);
+            next_url = paginated_response.next;
+        }
+
+        Ok(())
+    }
+
+    fn process_track_items(&mut self, items: Vec<PlaylistItem>, verbose: bool) {
+        for item in items {
+            if let Some(track) = item.track {
+                if let Some(track_id) = track.id {
+                    let artists: Vec<String> =
+                        track.artists.iter().map(|a| a.name.clone()).collect();
+                    let artists_string = artists.join(", ");
+
+                    let spotify_track = SpotifyTrack::new(
+                        track.name.clone(),
+                        artists_string.clone(),
+                        track_id.clone(),
+                    );
+
+                    self.tracks.insert(track_id, spotify_track);
+                    if verbose {
+                        println!(
+                            "Adding {} by {} to the playlist data",
+                            track.name.yellow(),
+                            artists_string.cyan()
+                        );
+                    }
+                } else {
+                    println!(
+                        "Skipping track '{}' because it has no ID (it might be a local file).",
+                        track.name.yellow()
+                    );
+                }
+            }
+        }
+    }
+
+    pub async fn pair_unpaired_tracks(
+        &mut self,
+        soundeo_user: &mut SoundeoUser,
+        priority: Priority,
+    ) -> SpotifyResult<()> {
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
+        let unpaired_tracks: Vec<_> = self
+            .tracks
+            .iter()
+            .filter(|(id, _)| !spotify_log.soundeo_track_ids.contains_key(*id))
+            .map(|(id, track)| (id.clone(), track.clone()))
+            .collect();
+
+        if unpaired_tracks.is_empty() {
+            return Ok(());
+        }
+
+        println!(
+            "Found {} unpaired tracks in '{}'.",
+            unpaired_tracks.len().to_string().cyan(),
+            self.name.yellow()
+        );
+
+        let auto_pair_single_only = Dialoguer::confirm(
+            "Do you want to automatically pair only tracks with a single match?".to_string(),
+            Some(true),
+        )
+        .change_context(SpotifyError)?;
+
+        if auto_pair_single_only {
+            println!("Starting auto-pairing for single-match tracks...");
+            let mut paired_count = 0;
+            let unpaired_len = unpaired_tracks.len();
+            for (i, (spotify_track_id, mut spotify_track)) in
+                unpaired_tracks.into_iter().enumerate()
+            {
+                println!(
+                    "Processing track {}/{}: {} by {}",
+                    format!("{}", i + 1).cyan(),
+                    format!("{}", unpaired_len).cyan(),
+                    spotify_track.title.yellow(),
+                    spotify_track.artists.yellow()
+                );
+                let result = spotify_track
+                    .find_single_soundeo_match(soundeo_user)
+                    .await?;
+
+                if let AutoPairResult::Paired(soundeo_id) = result {
+                    paired_count += 1;
+                    println!("  └─ {} Paired automatically.", "✔".green());
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track_id,
+                        Some(soundeo_id.clone()),
+                    )
+                    .change_context(SpotifyError)?;
+
+                    if DjWizardLog::add_queued_track(soundeo_id, priority)
+                        .change_context(SpotifyError)?
+                    {
+                        println!(
+                            "    └─ Added to download queue with {} priority.",
+                            format!("{:?}", priority).cyan()
+                        );
+                    } else {
+                        println!("    └─ Already in download queue.");
+                    }
+                } else {
+                    println!(
+                        "  └─ {} Not auto-paired (multiple matches or no match found).",
+                        "✖".red()
+                    );
+                }
+            }
+            println!(
+                "\nPairing complete. Automatically paired {} new tracks.",
+                paired_count.to_string().green()
+            );
+        } else {
+            println!("Starting manual pairing process...");
+            let unpaired_len = unpaired_tracks.len();
+            for (i, (spotify_track_id, mut spotify_track)) in
+                unpaired_tracks.into_iter().enumerate()
+            {
+                println!(
+                    "Pairing track {}/{}: {} by {}",
+                    i + 1,
+                    unpaired_len,
+                    spotify_track.title.cyan(),
+                    spotify_track.artists.yellow()
+                );
+                let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
+                DjWizardLog::update_spotify_to_soundeo_track(
+                    spotify_track_id,
+                    soundeo_track_id.clone(),
+                )
+                .change_context(SpotifyError)?;
+                if let Some(id) = soundeo_track_id {
+                    if DjWizardLog::add_queued_track(id, priority).change_context(SpotifyError)? {
+                        println!(
+                            "    └─ Added to download queue with {} priority.",
+                            format!("{:?}", priority).cyan()
+                        );
+                    } else {
+                        println!("    └─ Already in download queue.");
+                    }
+                }
+            }
+        }
+
+        println!("{}", "Pairing complete.".green());
         Ok(())
     }
 
     pub fn prompt_select_playlist(prompt_text: &str) -> SpotifyResult<Self> {
-        let mut spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let playlist_names = spotify
+        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let mut playlist_names = spotify
             .playlists
             .values()
             .map(|playlist| playlist.name.clone())
             .collect::<Vec<_>>();
+        if playlist_names.is_empty() {
+            return Err(Report::new(SpotifyError)
+                .attach_printable("No Spotify playlists have been added to the log yet.")
+                .attach(Suggestion(
+                    "Please add a playlist first using the 'Add new playlist from url' option."
+                        .to_string(),
+                )));
+        }
+        playlist_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
         let selection = Dialoguer::select(prompt_text.to_string(), playlist_names.clone(), None)
             .change_context(SpotifyError)?;
         let playlist = spotify.get_playlist_by_name(playlist_names[selection].clone())?;
@@ -143,17 +367,18 @@ impl SpotifyPlaylist {
 #[cfg(test)]
 mod tests {
     use crate::spotify::playlist::SpotifyPlaylist;
+    use dotenvy::dotenv;
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_get_playlist() {
-        // DnB
-        let playlist_url = "https://open.spotify.com/playlist/6YYCPN91F4xI1Z17Hzn7ir".to_string();
-        // House
-        // let playlist_url = "https://open.spotify.com/playlist/0B2bjiQkVcIHXXgqFb1k7T".to_string();
-        let mut playlist = SpotifyPlaylist::new(playlist_url).unwrap();
-        playlist.get_playlist_info().await.unwrap();
-        // println!("{:#?}", api_response);
-    }
+    // #[tokio::test]
+    // #[ignore] // Requires .env credentials and network access. Run with `cargo test -- --ignored`
+    // async fn test_get_playlist() {
+    //     dotenv().ok();
+    //     let playlist_url = "https://open.spotify.com/playlist/6YYCPN91F4xI1Z17Hzn7ir".to_string();
+    //     let mut playlist = SpotifyPlaylist::new(playlist_url).unwrap();
+    //     playlist.get_playlist_info().await.unwrap();
+    //     assert!(!playlist.tracks.is_empty());
+    //     assert!(!playlist.name.is_empty());
+    // }
 }
