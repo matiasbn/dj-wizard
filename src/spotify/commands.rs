@@ -19,12 +19,33 @@ use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::{SoundeoUser, User};
 use crate::{DjWizardCommands, Suggestion};
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct TracksInfo {
+    href: String,
+    total: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ApiSimplePlaylist {
+    id: String,
+    name: String,
+    public: bool,
+    href: String, // API URL for the full playlist object
+    tracks: TracksInfo,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct PaginatedPlaylistsResponse {
+    items: Vec<ApiSimplePlaylist>,
+    next: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum SpotifyCommands {
-    AddNewPlaylist,
+    SyncPublicPlaylists,
+    AddNewPlaylistFromUrl,
     UpdatePlaylist,
     DownloadTracksFromPlaylist,
-    // CreateSpotifyPlaylistFile,
     PrintDownloadedTracksByPlaylist,
 }
 
@@ -57,8 +78,9 @@ impl SpotifyCommands {
         let selection =
             Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
         return match Self::get_selection(selection) {
-            SpotifyCommands::AddNewPlaylist => Self::add_new_playlist(&user_config).await,
+            SpotifyCommands::AddNewPlaylistFromUrl => Self::add_new_playlist(&user_config).await,
             SpotifyCommands::UpdatePlaylist => Self::update_playlist(&user_config).await,
+            SpotifyCommands::SyncPublicPlaylists => Self::sync_public_playlists(&user_config).await,
             SpotifyCommands::DownloadTracksFromPlaylist => Self::download_from_playlist().await,
             SpotifyCommands::PrintDownloadedTracksByPlaylist => {
                 Self::print_downloaded_songs_by_playlist()
@@ -130,6 +152,62 @@ impl SpotifyCommands {
         println!(
             "Playlist {} successfully updated",
             playlist.name.clone().green()
+        );
+        Ok(())
+    }
+
+    async fn sync_public_playlists(user_config: &User) -> SpotifyResult<()> {
+        println!("Fetching your public playlists from Spotify...");
+        let client = reqwest::Client::new();
+        let mut all_playlists: Vec<ApiSimplePlaylist> = Vec::new();
+        let mut next_url = Some("https://api.spotify.com/v1/me/playlists".to_string());
+
+        while let Some(url) = next_url {
+            let response: PaginatedPlaylistsResponse = client
+                .get(&url)
+                .bearer_auth(&user_config.spotify_access_token)
+                .send()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?
+                .json()
+                .await
+                .into_report()
+                .change_context(SpotifyError)?;
+
+            all_playlists.extend(response.items);
+            next_url = response.next;
+        }
+
+        let public_playlists: Vec<ApiSimplePlaylist> =
+            all_playlists.into_iter().filter(|p| p.public).collect();
+
+        if public_playlists.is_empty() {
+            println!("{}", "No public playlists found in your account.".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "Found {} public playlists. Starting sync...",
+            public_playlists.len()
+        );
+
+        for simple_playlist in public_playlists {
+            println!("Syncing playlist: {}", simple_playlist.name.clone().green());
+            let playlist_url = format!("https://open.spotify.com/playlist/{}", simple_playlist.id);
+            let mut playlist = SpotifyPlaylist::new(playlist_url).change_context(SpotifyError)?;
+
+            playlist
+                .get_playlist_info(&user_config.spotify_access_token)
+                .await
+                .change_context(SpotifyError)?;
+
+            DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
+        }
+
+        println!(
+            "\n{}",
+            "All public playlists have been synced successfully.".green()
         );
         Ok(())
     }

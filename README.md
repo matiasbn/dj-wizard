@@ -122,6 +122,10 @@ To run the API integration tests, you need to set up your Spotify API credential
         * Prompts the user to select a playlist by name.
         * Re-scrapes the selected playlist's information from Spotify.
         * Updates the playlist data in `soundeo_log.json`.
+    * **Sync Public Playlists:**
+        * Fetches all public playlists from the logged-in user's Spotify account.
+        * For each public playlist, fetches the full track list.
+        * Adds any new public playlists to the log, and updates any existing ones.
     * **Download Tracks From Playlist:**
         * Lists previously added playlists.
         * Prompts the user to select a playlist by name.
