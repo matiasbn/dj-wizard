@@ -1,15 +1,36 @@
 use crate::user::User;
 use crate::{DjWizardCommands, Suggestion};
+use async_trait::async_trait;
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
 use google_drive3::api::{File, Scope};
 use google_drive3::hyper::client::HttpConnector;
 use google_drive3::hyper_rustls::HttpsConnector;
+use google_drive3::oauth2::storage::{TokenInfo, TokenStorage};
 use google_drive3::{hyper, hyper_rustls, oauth2, DriveHub};
 use std::default::Default;
 use std::fs;
+use std::io::Cursor;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use super::{BackupError, BackupResult};
+
+#[derive(Clone, Default)]
+struct EphemeralTokenStorage {
+    token: Arc<StdMutex<Option<TokenInfo>>>,
+}
+
+#[async_trait]
+impl TokenStorage for EphemeralTokenStorage {
+    async fn set(&self, _scopes: &[&str], token: TokenInfo) -> anyhow::Result<()> {
+        *self.token.lock().unwrap() = Some(token);
+        Ok(())
+    }
+
+    async fn get(&self, _scopes: &[&str]) -> Option<TokenInfo> {
+        self.token.lock().unwrap().clone()
+    }
+}
 
 pub struct BackupCommands;
 
@@ -39,34 +60,57 @@ impl BackupCommands {
         Ok(())
     }
 
+    async fn refresh_google_token(user: &User) -> BackupResult<String> {
+        // Use the same placeholders as the login function.
+        // These credentials are required to refresh the token.
+        let client_id = "YOUR_GOOGLE_CLIENT_ID";
+        let client_secret = "YOUR_GOOGLE_CLIENT_SECRET";
+
+        let client = reqwest::Client::new();
+        let params = [
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", &user.google_refresh_token),
+            ("grant_type", "refresh_token"),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(BackupError)?
+            .json()
+            .await
+            .into_report()
+            .change_context(BackupError)?;
+
+        token_response["access_token"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                Report::new(BackupError).attach_printable(format!(
+                    "Failed to get access_token from refresh response: {:?}",
+                    token_response
+                ))
+            })
+    }
+
     async fn get_hub(user: &User) -> BackupResult<DriveHub<HttpsConnector<HttpConnector>>> {
-        let secret = oauth2::ApplicationSecret {
-            client_id: "a57ab1ceee1f4094b55924d3e228ae53".to_string(),
-            client_secret: "".to_string(), // Not needed for desktop app flow
-            token_uri: "https://oauth2.googleapis.com/token".to_string(),
-            auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
-            redirect_uris: vec!["http://localhost:8889/callback".to_string()],
-            ..Default::default()
-        };
-
-        let mut token = oauth2::Token::from(serde_json::json!({
-            "refresh_token": user.google_refresh_token
-        }));
-        token.set_client_secret(secret.client_id.clone());
-
-        let auth = oauth2::InstalledFlowAuthenticator::builder(
-            secret,
-            oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-        )
-        .build()
-        .await
-        .into_report()
-        .change_context(BackupError)?;
+        let access_token = Self::refresh_google_token(user).await?;
+        let auth = oauth2::AccessTokenAuthenticator::builder(access_token)
+            .build()
+            .await
+            .into_report()
+            .change_context(BackupError)?;
 
         let hub = DriveHub::new(
             hyper::Client::builder().build(
                 hyper_rustls::HttpsConnectorBuilder::new()
                     .with_native_roots()
+                    .into_report()
+                    .change_context(BackupError)?
                     .https_or_http()
                     .enable_http1()
                     .build(),
@@ -136,32 +180,42 @@ impl BackupCommands {
     }
 
     async fn perform_google_login() -> BackupResult<String> {
+        // TODO: Replace these placeholder values with your own credentials from the Google Cloud Console.
+        let client_id = "YOUR_GOOGLE_CLIENT_ID";
+        let client_secret = "YOUR_GOOGLE_CLIENT_SECRET";
+
         let secret = oauth2::ApplicationSecret {
-            client_id: "a57ab1ceee1f4094b55924d3e228ae53".to_string(),
-            client_secret: "".to_string(), // Not needed for desktop app flow
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
             token_uri: "https://oauth2.googleapis.com/token".to_string(),
             auth_uri: "https://accounts.google.com/o/oauth2/auth".to_string(),
             redirect_uris: vec!["http://localhost:8889/callback".to_string()],
             ..Default::default()
         };
 
+        let storage = EphemeralTokenStorage::default();
+
         let auth = oauth2::InstalledFlowAuthenticator::builder(
             secret,
             oauth2::InstalledFlowReturnMethod::HTTPRedirect,
         )
+        .with_storage(Box::new(storage.clone()))
         .build()
         .await
         .into_report()
         .change_context(BackupError)?;
 
-        let scopes = &[Scope::DriveFile.as_ref()];
-        let token = auth
-            .token(scopes)
+        let scopes = &[Scope::File.as_ref()];
+        auth.token(scopes)
             .await
             .into_report()
             .change_context(BackupError)?;
 
-        token.refresh_token.ok_or_else(|| {
+        let token_info = storage.get(scopes).await.ok_or_else(|| {
+            Report::new(BackupError).attach_printable("Failed to retrieve token after login flow.")
+        })?;
+
+        token_info.refresh_token.ok_or_else(|| {
             Report::new(BackupError).attach_printable(
                 "Google did not provide a refresh token. Please try logging in again.",
             )

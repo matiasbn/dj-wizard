@@ -8,7 +8,7 @@ use std::{fmt, fs};
 use crate::url_list::UrlListCRUD;
 use crate::DjWizardError;
 use colored::Colorize;
-use error_stack::{IntoReport, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -109,6 +109,14 @@ impl DjWizardLog {
 
     fn get_log_path(soundeo_user: &SoundeoUser) -> String {
         format!("{}/soundeo_log.json", soundeo_user.download_path)
+    }
+
+    pub fn get_log_path_from_config(user: &User) -> DjWizardLogResult<String> {
+        if user.download_path.is_empty() {
+            return Err(Report::new(DjWizardLogError)
+                .attach_printable("Download path is not set in the configuration."));
+        }
+        Ok(format!("{}/soundeo_log.json", user.download_path))
     }
 
     pub fn add_queued_track(track_id: String) -> DjWizardLogResult<bool> {
