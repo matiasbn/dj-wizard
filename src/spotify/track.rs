@@ -4,7 +4,7 @@ use error_stack::{Report, ResultExt};
 use serde::{Deserialize, Serialize};
 
 use crate::dialoguer::Dialoguer;
-use crate::soundeo::search_bar::SoundeoSearchBar;
+use crate::soundeo::search_bar::{SoundeoSearchBar, SoundeoSearchBarResult};
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::{SpotifyError, SpotifyResult};
 use crate::user::SoundeoUser;
@@ -25,49 +25,59 @@ impl SpotifyTrack {
         }
     }
 
+    pub async fn find_single_soundeo_match(
+        &mut self,
+        soundeo_user: &SoundeoUser,
+    ) -> SpotifyResult<Option<String>> {
+        let downloadable_tracks = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
+
+        if downloadable_tracks.len() == 1 {
+            // Exactly one match, perfect for auto-pairing.
+            let (search_result, track_info) = &downloadable_tracks[0];
+            println!(
+                "  Found single match for '{}': {}",
+                self.title.clone().cyan(),
+                track_info.title.clone().green()
+            );
+            Ok(Some(search_result.value.clone()))
+        } else {
+            // Zero or more than one match, skip for now.
+            if downloadable_tracks.is_empty() {
+                println!(
+                    "  Skipping '{}': No downloadable matches found.",
+                    self.title.clone().yellow()
+                );
+            } else {
+                println!(
+                    "  Skipping '{}': Found {} matches, requires manual selection.",
+                    self.title.clone().yellow(),
+                    downloadable_tracks.len()
+                );
+            }
+            Ok(None)
+        }
+    }
+
     pub async fn get_soundeo_track_id(
         &self,
         soundeo_user: &SoundeoUser,
     ) -> SpotifyResult<Option<String>> {
-        let term = self.get_track_search_term();
-        let results = SoundeoSearchBar::Tracks
-            .search_term(term, &soundeo_user)
-            .await
-            .change_context(SpotifyError)?;
-        if results.is_empty() {
+        let downloadable_tracks = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
+
+        if downloadable_tracks.is_empty() {
             println!(
                 "Tracks not found for song {} by {}: {}",
                 self.title.clone().red(),
                 self.artists.clone().red(),
                 self.get_track_url()
             );
-            return Ok(None);
+            return Ok(None); // No downloadable tracks found at all.
         }
-        let mut titles = vec![];
-        for result in results.clone() {
-            let id = result.value;
-            let mut full_info = SoundeoTrack::new(id.clone());
-            full_info
-                .get_info(&soundeo_user, false)
-                .await
-                .change_context(SpotifyError)?;
-            if full_info.downloadable {
-                titles.push(format!(
-                    "{} - {}",
-                    full_info.title,
-                    full_info.get_track_url()
-                ));
-            }
-        }
-        if titles.is_empty() {
-            println!(
-                "Track is not downloadable, {} by {}: {}",
-                self.title.clone().red(),
-                self.artists.clone().red(),
-                self.get_track_url()
-            );
-            return Ok(None);
-        }
+
+        let mut titles: Vec<String> = downloadable_tracks
+            .iter()
+            .map(|(_, info)| format!("{} - {}", info.title, info.get_track_url()))
+            .collect();
 
         if titles.len() == 1 {
             let track_data = format!(
@@ -77,7 +87,7 @@ impl SpotifyTrack {
                 self.get_track_url()
             );
             println!("Track found for {} \n {}", track_data, titles[0]);
-            return Ok(Some(results[0].value.clone()));
+            return Ok(Some(downloadable_tracks[0].0.value.clone()));
         }
 
         titles.push("Skip this track".purple().to_string());
@@ -95,7 +105,7 @@ impl SpotifyTrack {
         if selection == titles.len() - 1 {
             return Ok(None);
         }
-        let search_result = results[selection].clone();
+        let search_result = downloadable_tracks[selection].0.clone();
         Ok(Some(search_result.value))
     }
 
@@ -106,4 +116,35 @@ impl SpotifyTrack {
     pub fn get_track_url(&self) -> String {
         format!("https://open.spotify.com/track/{}", self.spotify_track_id)
     }
+}
+
+/// Helper function to search Soundeo and filter for downloadable tracks.
+async fn find_downloadable_soundeo_tracks(
+    spotify_track: &SpotifyTrack,
+    soundeo_user: &SoundeoUser,
+) -> SpotifyResult<Vec<(SoundeoSearchBarResult, SoundeoTrack)>> {
+    let term = spotify_track.get_track_search_term();
+    let results = SoundeoSearchBar::Tracks
+        .search_term(term, soundeo_user)
+        .await
+        .change_context(SpotifyError)?;
+
+    if results.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut downloadable_results = vec![];
+    for result in results {
+        let id = result.value.clone();
+        let mut full_info = SoundeoTrack::new(id);
+        full_info
+            .get_info(soundeo_user, false)
+            .await
+            .change_context(SpotifyError)?;
+        if full_info.downloadable {
+            downloadable_results.push((result, full_info));
+        }
+    }
+
+    Ok(downloadable_results)
 }

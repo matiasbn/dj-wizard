@@ -242,23 +242,53 @@ impl SpotifyPlaylist {
         }
 
         println!(
-            "Found {} unpaired tracks in '{}'. Starting pairing process...",
+            "Found {} unpaired tracks in '{}'.",
             unpaired_tracks.len().to_string().cyan(),
             self.name.yellow()
         );
 
-        let unpaired_len = unpaired_tracks.len();
-        for (i, (spotify_track_id, mut spotify_track)) in unpaired_tracks.into_iter().enumerate() {
-            println!(
-                "Pairing track {}/{}: {} by {}",
-                i + 1,
-                unpaired_len,
-                spotify_track.title.cyan(),
-                spotify_track.artists.yellow()
-            );
-            let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-            DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_track_id)
-                .change_context(SpotifyError)?;
+        let auto_pair_single_only = Dialoguer::confirm(
+            "Do you want to automatically pair only tracks with a single match?".to_string(),
+            Some(true),
+        )
+        .change_context(SpotifyError)?;
+
+        if auto_pair_single_only {
+            println!("Starting auto-pairing for single-match tracks...");
+            for (spotify_track_id, mut spotify_track) in unpaired_tracks.into_iter() {
+                let soundeo_track_id = spotify_track
+                    .find_single_soundeo_match(soundeo_user)
+                    .await?;
+
+                if let Some(id) = &soundeo_track_id {
+                    println!(
+                        "  -> Automatically paired '{}'",
+                        spotify_track.title.green()
+                    );
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track_id,
+                        Some(id.clone()),
+                    )
+                    .change_context(SpotifyError)?;
+                }
+            }
+        } else {
+            println!("Starting manual pairing process...");
+            let unpaired_len = unpaired_tracks.len();
+            for (i, (spotify_track_id, mut spotify_track)) in
+                unpaired_tracks.into_iter().enumerate()
+            {
+                println!(
+                    "Pairing track {}/{}: {} by {}",
+                    i + 1,
+                    unpaired_len,
+                    spotify_track.title.cyan(),
+                    spotify_track.artists.yellow()
+                );
+                let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
+                DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_track_id)
+                    .change_context(SpotifyError)?;
+            }
         }
 
         println!("{}", "Pairing complete.".green());
