@@ -214,7 +214,7 @@ impl SpotifyCommands {
         }
 
         let mut public_playlists: Vec<ApiSimplePlaylist> =
-            all_playlists.into_iter().filter(|p| p.public).collect();
+            all_playlists.iter().filter(|p| p.public).cloned().collect();
 
         // Sort playlists alphabetically for a better user experience
         public_playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -271,8 +271,24 @@ impl SpotifyCommands {
             playlists_to_sync.len()
         );
 
+        let local_spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
         for simple_playlist in playlists_to_sync {
-            println!("Syncing playlist: {}", simple_playlist.name.clone().green());
+            if local_spotify_log
+                .playlists
+                .contains_key(&simple_playlist.id)
+            {
+                println!(
+                    "Playlist '{}' already exists locally. Skipping.",
+                    simple_playlist.name.yellow()
+                );
+                continue;
+            }
+
+            println!(
+                "Syncing new playlist: {}",
+                simple_playlist.name.clone().green()
+            );
             let playlist_url = format!("https://open.spotify.com/playlist/{}", simple_playlist.id);
             let mut playlist = SpotifyPlaylist::new(playlist_url).change_context(SpotifyError)?;
 
@@ -282,6 +298,44 @@ impl SpotifyCommands {
                 .change_context(SpotifyError)?;
 
             DjWizardLog::create_spotify_playlist(playlist.clone()).change_context(SpotifyError)?;
+        }
+
+        // --- (Optional) Clean up stale playlists that were deleted from Spotify ---
+        let local_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        // We use all_playlists (public and private) to check for existence.
+        let remote_playlist_ids: std::collections::HashSet<String> =
+            all_playlists.iter().map(|p| p.id.clone()).collect();
+
+        let stale_playlists: Vec<SpotifyPlaylist> = local_log
+            .playlists
+            .values()
+            .filter(|local_playlist| {
+                !remote_playlist_ids.contains(&local_playlist.spotify_playlist_id)
+            })
+            .cloned()
+            .collect();
+
+        if !stale_playlists.is_empty() {
+            println!("\n{}", "The following playlists exist locally but were not found in your Spotify account (they may have been deleted):".yellow());
+            for p in &stale_playlists {
+                println!("- {}", p.name.red());
+            }
+
+            let confirm_delete = Dialoguer::confirm(
+                "Do you want to remove these stale playlists from the local log?".to_string(),
+                Some(true), // Default to yes, as they are likely deleted.
+            )
+            .change_context(SpotifyError)?;
+
+            if confirm_delete {
+                let ids_to_delete: Vec<String> = stale_playlists
+                    .iter()
+                    .map(|p| p.spotify_playlist_id.clone())
+                    .collect();
+                DjWizardLog::delete_spotify_playlists(&ids_to_delete)
+                    .change_context(SpotifyError)?;
+                println!("{}", "Stale playlists removed from the local log.".green());
+            }
         }
 
         println!("\n{}", "Sync complete.".green());
