@@ -64,7 +64,7 @@ impl SpotifyPlaylist {
                 height: Some(9999),
                 browser_context_id: None,
                 enable_begin_frame_control: Some(false),
-                new_window: None,
+                new_window: Some(true),
                 background: None,
                 for_tab: None,
             })
