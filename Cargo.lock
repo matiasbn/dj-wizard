@@ -568,6 +568,7 @@ name = "dj-wizard"
 version = "0.1.25"
 dependencies = [
  "Inflector",
+ "base64 0.22.1",
  "clap",
  "colored",
  "colorize",
