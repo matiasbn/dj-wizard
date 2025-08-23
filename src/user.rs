@@ -45,6 +45,8 @@ pub struct User {
     pub spotify_access_token: String,
     #[serde(default)]
     pub spotify_refresh_token: String,
+    #[serde(default)]
+    pub google_refresh_token: String,
 }
 
 impl User {
@@ -60,6 +62,7 @@ impl User {
             },
             spotify_access_token: "".to_string(),
             spotify_refresh_token: "".to_string(),
+            google_refresh_token: "".to_string(),
         }
     }
 
