@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::spotify::track::SpotifyTrack;
-use crate::spotify::{SpotifyError, SpotifyResult};
-use crate::user::User;
+use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
+use crate::user::{SoundeoUser, User};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct TokenResponse {
@@ -222,6 +222,47 @@ impl SpotifyPlaylist {
                 }
             }
         }
+    }
+
+    pub async fn pair_unpaired_tracks(
+        &mut self,
+        soundeo_user: &mut SoundeoUser,
+    ) -> SpotifyResult<()> {
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
+        let unpaired_tracks: Vec<_> = self
+            .tracks
+            .iter()
+            .filter(|(id, _)| !spotify_log.soundeo_track_ids.contains_key(*id))
+            .map(|(id, track)| (id.clone(), track.clone())) // Clone to avoid borrowing issues
+            .collect();
+
+        if unpaired_tracks.is_empty() {
+            return Ok(());
+        }
+
+        println!(
+            "Found {} unpaired tracks in '{}'. Starting pairing process...",
+            unpaired_tracks.len().to_string().cyan(),
+            self.name.yellow()
+        );
+
+        for (i, (spotify_track_id, mut spotify_track)) in
+            unpaired_tracks.clone().into_iter().enumerate()
+        {
+            println!(
+                "Pairing track {}/{}: {}",
+                i + 1,
+                unpaired_tracks.clone().len(),
+                spotify_track.title.cyan()
+            );
+            let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
+            DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_track_id)
+                .change_context(SpotifyError)?;
+        }
+
+        println!("{}", "Pairing complete.".green());
+        Ok(())
     }
 
     pub fn prompt_select_playlist(prompt_text: &str) -> SpotifyResult<Self> {

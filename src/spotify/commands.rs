@@ -245,32 +245,42 @@ impl SpotifyCommands {
     }
 
     async fn download_from_playlist() -> SpotifyResult<()> {
-        let spotify = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let playlist = SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
+        let mut playlist =
+            SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
-        let mut soundeo_ids = vec![];
-        for (spotify_track_id, mut spotify_track) in playlist.tracks {
-            let soundeo_track_id = if let Some(soundeo_track_id) =
-                spotify.soundeo_track_ids.get(&spotify_track_id)
-            {
-                soundeo_track_id.clone()
-            } else {
-                let soundeo_track_id = spotify_track.get_soundeo_track_id(&soundeo_user).await?;
-                DjWizardLog::update_spotify_to_soundeo_track(
-                    spotify_track_id.clone(),
-                    soundeo_track_id.clone(),
-                )
-                .change_context(SpotifyError)?;
-                soundeo_track_id.clone()
-            };
-            if soundeo_track_id.is_some() {
-                soundeo_ids.push(soundeo_track_id.clone().unwrap());
-            }
+
+        // Ensure all tracks are paired before proceeding.
+        playlist
+            .pair_unpaired_tracks(&mut soundeo_user)
+            .await
+            .change_context(SpotifyError)?;
+
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let soundeo_ids: Vec<String> = playlist
+            .tracks
+            .keys()
+            .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
+            .filter_map(|soundeo_id_option| soundeo_id_option.as_ref())
+            .cloned()
+            .collect();
+
+        if soundeo_ids.is_empty() {
+            println!(
+                "{}",
+                "No downloadable tracks found for this playlist after pairing.".yellow()
+            );
+            return Ok(());
         }
+
+        println!(
+            "Found {} matched tracks. Starting download...",
+            soundeo_ids.len()
+        );
+
         for soundeo_track_id in soundeo_ids {
             let mut track = SoundeoTrack::new(soundeo_track_id);
             track
