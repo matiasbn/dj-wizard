@@ -221,4 +221,112 @@ mod tests {
         assert!(!playlist.tracks.is_empty());
         assert!(!playlist.name.is_empty());
     }
+
+    #[tokio::test]
+    #[ignore] // This test is interactive and requires manual user login via a browser.
+    async fn test_authorization_code_flow() {
+        use tiny_http::{Response, Server};
+        use webbrowser;
+
+        // 1. Load credentials and configuration from .env file
+        dotenv().ok();
+        let client_id =
+            env::var("SPOTIFY_CLIENT_ID").expect("SPOTIFY_CLIENT_ID must be set in .env");
+        let client_secret =
+            env::var("SPOTIFY_CLIENT_SECRET").expect("SPOTIFY_CLIENT_SECRET must be set in .env");
+        let redirect_uri = "http://localhost:8888/callback";
+        let scopes = "playlist-read-private playlist-read-collaborative";
+
+        // 2. Start a temporary local server to catch the redirect
+        let server = Server::http("127.0.0.1:8888").unwrap();
+        println!("Local server started at http://127.0.0.1:8888");
+
+        // 3. Construct the authorization URL and open it in the browser
+        let auth_url = format!(
+            "https://accounts.spotify.com/authorize?response_type=code&client_id={}&scope={}&redirect_uri={}",
+            client_id,
+            scopes.replace(' ', "%20"), // URL encode scopes
+            redirect_uri
+        );
+
+        println!(
+            "\n{}\n",
+            "Please log in to Spotify in the browser window that just opened.".yellow()
+        );
+        println!(
+            "If it didn't open, please copy and paste this URL into your browser:\n{}",
+            auth_url.cyan()
+        );
+
+        if webbrowser::open(&auth_url).is_err() {
+            println!("Could not automatically open browser.");
+        }
+
+        // 4. Wait for the user to log in and for Spotify to redirect back to our server
+        let request = server
+            .recv()
+            .expect("Failed to receive request from browser");
+        let full_url = format!("http://localhost:8888{}", request.url());
+        let parsed_url = Url::parse(&full_url).unwrap();
+        let auth_code = parsed_url
+            .query_pairs()
+            .find_map(|(key, value)| {
+                if key == "code" {
+                    Some(value.into_owned())
+                } else {
+                    None
+                }
+            })
+            .expect("Could not find 'code' in callback URL");
+
+        // Send a response to the browser so it doesn't hang
+        let response = Response::from_string(
+            "<h1>Authentication successful!</h1><p>You can close this browser tab now.</p>",
+        );
+        request.respond(response).unwrap();
+        println!("\nAuthorization code received successfully!");
+
+        // 5. Exchange the authorization code for an access token and refresh token
+        let client = reqwest::Client::new();
+        let auth_string = format!("{}:{}", client_id, client_secret);
+        let encoded_auth = general_purpose::STANDARD.encode(auth_string);
+
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("code", &auth_code),
+            ("redirect_uri", redirect_uri),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://accounts.spotify.com/api/token")
+            .header("Authorization", format!("Basic {}", encoded_auth))
+            .form(&params)
+            .send()
+            .await
+            .expect("Failed to send token request")
+            .json()
+            .await
+            .expect("Failed to parse token response");
+
+        // 6. Print the credentials
+        println!("\n--- User Credentials Obtained ---");
+        let access_token = token_response["access_token"].as_str().unwrap_or("N/A");
+        let refresh_token = token_response["refresh_token"].as_str().unwrap_or("N/A");
+
+        println!("Access Token: {}", access_token.green());
+        println!("Refresh Token: {}", refresh_token.yellow());
+        println!(
+            "\nFull response:\n{}",
+            serde_json::to_string_pretty(&token_response).unwrap()
+        );
+
+        assert!(
+            !access_token.is_empty() && access_token != "N/A",
+            "Access token should not be empty"
+        );
+        assert!(
+            !refresh_token.is_empty() && refresh_token != "N/A",
+            "Refresh token should not be empty"
+        );
+    }
 }

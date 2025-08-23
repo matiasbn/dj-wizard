@@ -36,3 +36,5 @@ dotenvy = "0.15"
 
 [dev-dependencies]
 dotenvy = "0.15"
+tiny_http = "0.12"
+webbrowser = "0.8"
