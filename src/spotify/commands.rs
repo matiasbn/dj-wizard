@@ -717,13 +717,16 @@ impl SpotifyCommands {
 
             let mut queued_for_this_playlist = 0;
             let mut processed_count = 0;
+            let all_unpaired_len = all_unpaired_tracks.len();
 
             for mut spotify_track in all_unpaired_tracks {
                 processed_count += 1;
                 println!(
-                    "    ({}/{}) Processing: {} by {}",
-                    processed_count,
-                    playlist.tracks.len(),
+                    "    ({}/{}) [Queued: {}/{}] Processing: {} by {}",
+                    processed_count.to_string().cyan(),
+                    all_unpaired_len.to_string().cyan(),
+                    queued_for_this_playlist.to_string().green(),
+                    num_to_queue.to_string().green(),
                     spotify_track.title.cyan(),
                     spotify_track.artists.cyan()
                 );
