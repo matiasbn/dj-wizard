@@ -44,8 +44,8 @@ struct PaginatedPlaylistsResponse {
 pub enum SpotifyCommands {
     SyncPublicPlaylists,
     DownloadTracksFromPlaylist,
-    UpdatePlaylist,
     AddNewPlaylistFromUrl,
+    UpdatePlaylist,
     PrintDownloadedTracksByPlaylist,
     DeletePlaylists,
 }
