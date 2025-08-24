@@ -21,6 +21,7 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
+use crate::soundeo::search_bar::SoundeoSearchBarResult;
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
@@ -453,6 +454,55 @@ impl SpotifyCommands {
                     cached_results.len()
                 );
 
+                // --- Automatic selection logic for cached results ---
+                let mut auto_selected_result: Option<&SoundeoSearchBarResult> = None;
+
+                // Priority 1: Extended Mix
+                if let Some(extended_mix) = cached_results
+                    .iter()
+                    .find(|r| r.label.contains("(Extended Mix)"))
+                {
+                    println!(
+                        "  └─ {} Automatically selected cached 'Extended Mix' version: {}",
+                        "✔".green(),
+                        extended_mix.label.cyan()
+                    );
+                    auto_selected_result = Some(extended_mix);
+                }
+                // Priority 2: Original Mix
+                else if let Some(original_mix) = cached_results
+                    .iter()
+                    .find(|r| r.label.contains("(Original Mix)"))
+                {
+                    println!(
+                        "  └─ {} Automatically selected cached 'Original Mix' version: {}",
+                        "✔".green(),
+                        original_mix.label.cyan()
+                    );
+                    auto_selected_result = Some(original_mix);
+                }
+                // Priority 3: All labels are identical
+                else if cached_results.len() > 1
+                    && cached_results
+                        .iter()
+                        .all(|r| r.label == cached_results[0].label)
+                {
+                    println!(
+                        "  └─ {} Automatically selected a match as all cached options were identical.",
+                        "✔".green(),
+                    );
+                    auto_selected_result = Some(&cached_results[0]);
+                }
+
+                if let Some(chosen_result) = auto_selected_result {
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track.spotify_track_id.clone(),
+                        Some(chosen_result.value.clone()),
+                    )
+                    .change_context(SpotifyError)?;
+                    continue; // Move to the next track
+                }
+
                 let mut options: Vec<String> =
                     cached_results.iter().map(|r| r.label.clone()).collect();
                 options.push("Skip this track".purple().to_string());
@@ -480,7 +530,7 @@ impl SpotifyCommands {
                     )
                     .change_context(SpotifyError)?;
                 } else {
-                    // User skipped
+                    // User skipped, do not update the log so it can be reviewed again.
                     println!("  └─ Skipped.");
                 }
             } else {
@@ -490,16 +540,17 @@ impl SpotifyCommands {
                     spotify_track.get_soundeo_track_id(&soundeo_user).await;
 
                 match soundeo_track_id_result {
-                    Ok(soundeo_id) => {
-                        // This will be Some(id) if user selected, or None if they skipped.
-                        DjWizardLog::update_spotify_to_soundeo_track(
-                            spotify_track.spotify_track_id.clone(),
-                            soundeo_id.clone(),
-                        )
-                        .change_context(SpotifyError)?;
-                        if soundeo_id.is_some() {
+                    Ok(soundeo_id_option) => {
+                        if let Some(soundeo_id) = soundeo_id_option {
+                            // Only update if a track was actually selected.
+                            DjWizardLog::update_spotify_to_soundeo_track(
+                                spotify_track.spotify_track_id.clone(),
+                                Some(soundeo_id),
+                            )
+                            .change_context(SpotifyError)?;
                             println!("  └─ {} Paired successfully.", "✔".green());
                         } else {
+                            // User skipped, do not update the log.
                             println!("  └─ Skipped.");
                         }
                     }

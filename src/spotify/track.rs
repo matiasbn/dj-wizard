@@ -66,6 +66,34 @@ impl SpotifyTrack {
             return Ok(None); // No downloadable tracks found at all.
         }
 
+        // --- Automatic selection logic ---
+
+        // Priority 1: Auto-select "(Extended Mix)" if available.
+        if let Some((result, track_info)) = downloadable_tracks
+            .iter()
+            .find(|(r, _)| r.label.contains("(Extended Mix)"))
+        {
+            println!(
+                "  └─ {} Automatically selected 'Extended Mix' version: {}",
+                "✔".green(),
+                track_info.title.cyan()
+            );
+            return Ok(Some(result.value.clone()));
+        }
+
+        // Priority 2: Auto-select "(Original Mix)" if available.
+        if let Some((result, track_info)) = downloadable_tracks
+            .iter()
+            .find(|(r, _)| r.label.contains("(Original Mix)"))
+        {
+            println!(
+                "  └─ {} Automatically selected 'Original Mix' version: {}",
+                "✔".green(),
+                track_info.title.cyan()
+            );
+            return Ok(Some(result.value.clone()));
+        }
+
         // Check for multiple matches with identical names to auto-select.
         if downloadable_tracks.len() > 1 {
             let first_track_title = &downloadable_tracks[0].1.title;
