@@ -798,6 +798,12 @@ impl SpotifyCommands {
         let mut playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
         playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
+        let mut total_tracks_count = 0;
+        let mut total_downloaded = 0;
+        let mut total_queued = 0;
+        let mut total_pending_pairing = 0;
+        let mut total_no_match = 0;
+
         // 3. Iterate through each playlist and categorize its tracks
         for playlist in playlists {
             let mut downloaded = 0;
@@ -834,6 +840,12 @@ impl SpotifyCommands {
                 }
             }
 
+            total_tracks_count += playlist.tracks.len();
+            total_downloaded += downloaded;
+            total_queued += queued;
+            total_pending_pairing += pending_pairing;
+            total_no_match += no_match;
+
             // 4. Print the report for the current playlist
             println!("\nPlaylist: {}", playlist.name.bright_blue().bold());
             println!(
@@ -848,6 +860,26 @@ impl SpotifyCommands {
             );
             println!("  - No Match Found:    {}", no_match.to_string().red());
         }
+
+        // 5. Print the grand total summary
+        println!("\n--- Grand Total Summary ---");
+        println!(
+            "  - Total Tracks:      {}",
+            total_tracks_count.to_string().white()
+        );
+        println!(
+            "  - Downloaded:        {}",
+            total_downloaded.to_string().green()
+        );
+        println!("  - In Queue:          {}", total_queued.to_string().cyan());
+        println!(
+            "  - Pending Pairing:   {}",
+            total_pending_pairing.to_string().yellow()
+        );
+        println!(
+            "  - No Match Found:    {}",
+            total_no_match.to_string().red()
+        );
 
         Ok(())
     }
@@ -1080,30 +1112,8 @@ impl SpotifyCommands {
             return Ok(());
         }
 
-        // 2. For each selected playlist, ask for number of tracks
-        let mut playlists_with_track_counts: Vec<(SpotifyPlaylist, usize)> = Vec::new();
-        for index in selections {
-            let selected_playlist = playlists[index].clone();
-            let prompt = format!(
-                "How many unpaired tracks do you want to queue from '{}'?",
-                selected_playlist.name.cyan()
-            );
-            let num_tracks_str = Dialoguer::input(prompt).change_context(SpotifyError)?;
-            let num_tracks: usize = num_tracks_str
-                .trim()
-                .parse()
-                .into_report()
-                .change_context(SpotifyError)?;
-
-            if num_tracks > 0 {
-                playlists_with_track_counts.push((selected_playlist, num_tracks));
-            }
-        }
-
-        if playlists_with_track_counts.is_empty() {
-            println!("No tracks selected to queue. Operation cancelled.");
-            return Ok(());
-        }
+        let selected_playlists: Vec<SpotifyPlaylist> =
+            selections.iter().map(|&i| playlists[i].clone()).collect();
 
         // 3. Set priority to High as per new global rule
         let selected_priority = Priority::High;
@@ -1118,7 +1128,7 @@ impl SpotifyCommands {
         let mut total_queued = 0;
         let mut total_failed = 0;
 
-        for (playlist, num_to_queue) in playlists_with_track_counts {
+        for playlist in selected_playlists {
             println!("\nProcessing playlist: {}", playlist.name.yellow());
 
             let current_spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
@@ -1140,75 +1150,71 @@ impl SpotifyCommands {
             }
 
             println!(
-                "  Attempting to pair and queue up to {} tracks from a pool of {} unpaired tracks...",
-                num_to_queue.to_string().cyan(),
+                "  Attempting to pair and queue all {} unpaired tracks...",
                 all_unpaired_tracks.len().to_string().cyan()
             );
 
-            let mut queued_for_this_playlist = 0;
             let mut processed_count = 0;
             let all_unpaired_len = all_unpaired_tracks.len();
 
             for mut spotify_track in all_unpaired_tracks {
                 processed_count += 1;
                 println!(
-                    "    ({}/{}) [Queued: {}/{}] Processing: {} by {}",
+                    "    ({}/{}) Processing: {} by {}",
                     processed_count.to_string().cyan(),
                     all_unpaired_len.to_string().cyan(),
-                    queued_for_this_playlist.to_string().green(),
-                    num_to_queue.to_string().green(),
                     spotify_track.title.cyan(),
                     spotify_track.artists.cyan()
                 );
 
-                let result = spotify_track
-                    .find_single_soundeo_match(&mut soundeo_user)
-                    .await
-                    .change_context(SpotifyError)?;
+                let pairing_result = spotify_track.find_single_soundeo_match(&soundeo_user).await;
 
-                match result {
-                    crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
-                        println!("      └─ {} Paired automatically.", "✔".green());
-                        DjWizardLog::update_spotify_to_soundeo_track(
-                            spotify_track.spotify_track_id.clone(),
-                            Some(soundeo_id.clone()),
-                        )
-                        .change_context(SpotifyError)?;
+                match pairing_result {
+                    Ok(result) => {
+                        match result {
+                            crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
+                                println!("      └─ {} Paired automatically.", "✔".green());
+                                DjWizardLog::update_spotify_to_soundeo_track(
+                                    spotify_track.spotify_track_id.clone(),
+                                    Some(soundeo_id.clone()),
+                                )
+                                .change_context(SpotifyError)?;
 
-                        if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
-                            .change_context(SpotifyError)?
-                        {
-                            println!(
-                                "        └─ Added to download queue with {} priority.",
-                                format!("{:?}", selected_priority).cyan()
-                            );
-                            total_queued += 1;
-                            queued_for_this_playlist += 1;
-                        } else {
-                            println!("        └─ Already in download queue.");
+                                if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
+                                    .change_context(SpotifyError)?
+                                {
+                                    println!(
+                                        "        └─ Added to download queue with {} priority.",
+                                        format!("{:?}", selected_priority).cyan()
+                                    );
+                                    total_queued += 1;
+                                } else {
+                                    println!("        └─ Already in download queue.");
+                                }
+                            }
+                            _ => {
+                                println!(
+                                    "      └─ {} Not auto-paired (multiple matches or no match found).",
+                                    "✖".red()
+                                );
+                                // Mark as processed so we don't check it again in this flow
+                                DjWizardLog::update_spotify_to_soundeo_track(
+                                    spotify_track.spotify_track_id.clone(),
+                                    None,
+                                )
+                                .change_context(SpotifyError)?;
+                                total_failed += 1;
+                            }
                         }
                     }
-                    _ => {
+                    Err(_) => {
                         println!(
-                            "      └─ {} Not auto-paired (multiple matches or no match found).",
-                            "✖".red()
+                            "      └─ {} Error pairing track: {}. Skipping.",
+                            "✖".red(),
+                            spotify_track.title.cyan()
                         );
-                        // Mark as processed so we don't check it again in this flow
-                        DjWizardLog::update_spotify_to_soundeo_track(
-                            spotify_track.spotify_track_id.clone(),
-                            None,
-                        )
-                        .change_context(SpotifyError)?;
                         total_failed += 1;
                     }
-                }
-
-                if queued_for_this_playlist >= num_to_queue {
-                    println!(
-                        "  └─ Reached the target of {} queued tracks for this playlist. Moving to the next.",
-                        num_to_queue.to_string().green()
-                    );
-                    break;
                 }
             }
         }
