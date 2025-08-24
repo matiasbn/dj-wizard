@@ -1,13 +1,10 @@
 use std::collections::HashMap;
-use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::Suggestion;
-use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
-use dotenvy::dotenv;
 use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -230,7 +227,6 @@ impl SpotifyPlaylist {
     pub async fn pair_unpaired_tracks(
         &mut self,
         soundeo_user: &mut SoundeoUser,
-        priority: Priority,
     ) -> SpotifyResult<()> {
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
@@ -251,93 +247,116 @@ impl SpotifyPlaylist {
             self.name.yellow()
         );
 
-        let auto_pair_single_only = Dialoguer::confirm(
-            "Do you want to automatically pair only tracks with a single match?".to_string(),
-            Some(true),
-        )
-        .change_context(SpotifyError)?;
+        // --- Phase 1: Automatic Pairing Pass ---
+        println!("\n--- Phase 1: Automatic Pairing Pass ---");
+        let mut paired_count = 0;
+        let mut needs_manual_review: Vec<(String, SpotifyTrack)> = Vec::new();
 
-        if auto_pair_single_only {
-            println!("Starting auto-pairing for single-match tracks...");
-            let mut paired_count = 0;
-            let unpaired_len = unpaired_tracks.len();
-            for (i, (spotify_track_id, mut spotify_track)) in
-                unpaired_tracks.into_iter().enumerate()
-            {
-                println!(
-                    "Processing track {}/{}: {} by {}",
-                    format!("{}", i + 1).cyan(),
-                    format!("{}", unpaired_len).cyan(),
-                    spotify_track.title.yellow(),
-                    spotify_track.artists.yellow()
-                );
-                let result = spotify_track
-                    .find_single_soundeo_match(soundeo_user)
-                    .await?;
-
-                if let AutoPairResult::Paired(soundeo_id) = result {
-                    paired_count += 1;
-                    println!("  └─ {} Paired automatically.", "✔".green());
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track_id,
-                        Some(soundeo_id.clone()),
-                    )
-                    .change_context(SpotifyError)?;
-
-                    if DjWizardLog::add_queued_track(soundeo_id, priority)
-                        .change_context(SpotifyError)?
-                    {
-                        println!(
-                            "    └─ Added to download queue with {} priority.",
-                            format!("{:?}", priority).cyan()
-                        );
-                    } else {
-                        println!("    └─ Already in download queue.");
-                    }
-                } else {
-                    println!(
-                        "  └─ {} Not auto-paired (multiple matches or no match found).",
-                        "✖".red()
-                    );
-                }
-            }
+        let unpaired_len = unpaired_tracks.len();
+        for (i, (spotify_track_id, mut spotify_track)) in unpaired_tracks.into_iter().enumerate() {
             println!(
-                "\nPairing complete. Automatically paired {} new tracks.",
-                paired_count.to_string().green()
+                "Processing track {}/{}: {} by {}",
+                format!("{}", i + 1).cyan(),
+                format!("{}", unpaired_len).cyan(),
+                spotify_track.title.yellow(),
+                spotify_track.artists.yellow()
             );
-        } else {
-            println!("Starting manual pairing process...");
-            let unpaired_len = unpaired_tracks.len();
-            for (i, (spotify_track_id, mut spotify_track)) in
-                unpaired_tracks.into_iter().enumerate()
-            {
-                println!(
-                    "Pairing track {}/{}: {} by {}",
-                    i + 1,
-                    unpaired_len,
-                    spotify_track.title.cyan(),
-                    spotify_track.artists.yellow()
-                );
-                let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-                DjWizardLog::update_spotify_to_soundeo_track(
-                    spotify_track_id,
-                    soundeo_track_id.clone(),
-                )
-                .change_context(SpotifyError)?;
-                if let Some(id) = soundeo_track_id {
-                    if DjWizardLog::add_queued_track(id, priority).change_context(SpotifyError)? {
-                        println!(
-                            "    └─ Added to download queue with {} priority.",
-                            format!("{:?}", priority).cyan()
-                        );
-                    } else {
-                        println!("    └─ Already in download queue.");
+            let result = spotify_track.find_single_soundeo_match(soundeo_user).await;
+
+            match result {
+                Ok(pair_result) => match pair_result {
+                    AutoPairResult::Paired(soundeo_id) => {
+                        paired_count += 1;
+                        println!("  └─ {} Paired automatically.", "✔".green());
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track_id.clone(),
+                            Some(soundeo_id.clone()),
+                        )
+                        .change_context(SpotifyError)?;
+
+                        if DjWizardLog::add_queued_track(soundeo_id, Priority::High)
+                            .change_context(SpotifyError)?
+                        {
+                            println!(
+                                "    └─ Added to download queue with {} priority.",
+                                format!("{:?}", Priority::High).cyan()
+                            );
+                        } else {
+                            println!("    └─ Already in download queue.");
+                        }
                     }
+                    AutoPairResult::NoMatch | AutoPairResult::MultipleMatches(_) => {
+                        println!("  └─ {} Needs manual review.", "…".yellow());
+                        needs_manual_review.push((spotify_track_id, spotify_track));
+                    }
+                },
+                Err(_) => {
+                    println!(
+                        "  └─ {} Error during search. Needs manual review.",
+                        "✖".red(),
+                    );
+                    needs_manual_review.push((spotify_track_id, spotify_track));
                 }
             }
         }
 
-        println!("{}", "Pairing complete.".green());
+        println!(
+            "\nAutomatic pass complete. Paired {} tracks.",
+            paired_count.to_string().green()
+        );
+
+        // --- Phase 2: Manual Pairing Pass ---
+        if needs_manual_review.is_empty() {
+            println!("{}", "No tracks require manual review.".green());
+            return Ok(());
+        }
+
+        println!("\n--- Phase 2: Manual Pairing Pass ---");
+        let confirm_manual = Dialoguer::confirm(
+            format!(
+                "There are {} tracks that need manual review. Do you want to review them now?",
+                needs_manual_review.len().to_string().yellow()
+            ),
+            Some(true),
+        )
+        .change_context(SpotifyError)?;
+
+        if !confirm_manual {
+            println!("Manual review skipped.");
+            return Ok(());
+        }
+
+        for (spotify_track_id, spotify_track) in needs_manual_review {
+            println!(
+                "\nReviewing: {} by {}",
+                spotify_track.title.yellow(),
+                spotify_track.artists.yellow()
+            );
+            let soundeo_id_result = spotify_track.get_soundeo_track_id(soundeo_user).await;
+
+            match soundeo_id_result {
+                Ok(soundeo_id_option) => {
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track_id,
+                        soundeo_id_option.clone(),
+                    )
+                    .change_context(SpotifyError)?;
+                    if let Some(id) = soundeo_id_option {
+                        DjWizardLog::add_queued_track(id, Priority::High)
+                            .change_context(SpotifyError)?;
+                    }
+                }
+                Err(_) => {
+                    println!(
+                        "  └─ {} Error reviewing track: {}",
+                        "✖".red(),
+                        spotify_track.title.cyan()
+                    );
+                }
+            }
+        }
+
+        println!("\n{}", "Manual pairing session complete.".green());
         Ok(())
     }
 
