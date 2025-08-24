@@ -227,7 +227,6 @@ impl SpotifyPlaylist {
     pub async fn pair_unpaired_tracks(
         &mut self,
         soundeo_user: &mut SoundeoUser,
-        priority: Priority,
     ) -> SpotifyResult<()> {
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
@@ -275,12 +274,12 @@ impl SpotifyPlaylist {
                         )
                         .change_context(SpotifyError)?;
 
-                        if DjWizardLog::add_queued_track(soundeo_id, priority)
+                        if DjWizardLog::add_queued_track(soundeo_id, Priority::High)
                             .change_context(SpotifyError)?
                         {
                             println!(
                                 "    └─ Added to download queue with {} priority.",
-                                format!("{:?}", priority).cyan()
+                                format!("{:?}", Priority::High).cyan()
                             );
                         } else {
                             println!("    └─ Already in download queue.");
@@ -334,8 +333,14 @@ impl SpotifyPlaylist {
                 spotify_track.artists.yellow()
             );
             let soundeo_id_option = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-            DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, soundeo_id_option)
-                .change_context(SpotifyError)?;
+            DjWizardLog::update_spotify_to_soundeo_track(
+                spotify_track_id,
+                soundeo_id_option.clone(),
+            )
+            .change_context(SpotifyError)?;
+            if let Some(id) = soundeo_id_option {
+                DjWizardLog::add_queued_track(id, Priority::High).change_context(SpotifyError)?;
+            }
         }
 
         println!("\n{}", "Manual pairing session complete.".green());

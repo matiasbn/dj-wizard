@@ -1,5 +1,4 @@
 use base64::Engine;
-use base64::{engine::general_purpose, Engine as _};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
@@ -8,6 +7,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use strum::IntoEnumIterator;
@@ -21,12 +21,13 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
-use crate::soundeo::search_bar::SoundeoSearchBarResult;
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
+use crate::spotify::SpotifyCRUD;
+use crate::spotify::SpotifyError;
+use crate::spotify::SpotifyResult;
 use crate::user::{SoundeoUser, User};
-use crate::{DjWizardCommands, Suggestion};
+use crate::Suggestion;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct TracksInfo {
@@ -114,6 +115,45 @@ impl SpotifyCommands {
                 return Ok(());
             }
         }
+
+        // --- Auto-queue any paired tracks that are not yet in the queue ---
+        println!("\nChecking for paired tracks that need to be queued...");
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(SpotifyError)?;
+
+        let queued_ids: HashSet<String> =
+            queued_tracks.iter().map(|t| t.track_id.clone()).collect();
+
+        let tracks_to_enqueue: Vec<String> = spotify_log
+            .soundeo_track_ids
+            .iter()
+            .filter_map(|(_, soundeo_id_option)| soundeo_id_option.as_ref())
+            .filter(|soundeo_id| {
+                // Condition: Not in queue AND not already downloaded
+                !queued_ids.contains(*soundeo_id)
+                    && soundeo_log
+                        .tracks_info
+                        .get(*soundeo_id)
+                        .map_or(true, |info| !info.already_downloaded)
+            })
+            .cloned()
+            .collect();
+
+        if !tracks_to_enqueue.is_empty() {
+            println!(
+                "Found {} paired tracks to add to the High priority queue.",
+                tracks_to_enqueue.len().to_string().green()
+            );
+            for soundeo_id in tracks_to_enqueue {
+                DjWizardLog::add_queued_track(soundeo_id, Priority::High)
+                    .change_context(SpotifyError)?;
+            }
+            println!("{}", "Auto-queueing complete.".green());
+        } else {
+            println!("No new paired tracks to queue.");
+        }
+        // --- End of auto-queue logic ---
 
         let command_to_run = match cli.and_then(|c| c.command) {
             Some(command) => command,
@@ -400,172 +440,24 @@ impl SpotifyCommands {
     }
 
     async fn pair_and_queue_unpaired_tracks() -> SpotifyResult<()> {
-        let playlist = SpotifyPlaylist::prompt_select_playlist(
-            "Select a playlist to manually pair tracks from",
-        )?;
+        let mut playlist =
+            SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
 
-        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-
-        // Filter for tracks that are not successfully paired yet.
-        let unresolved_tracks: Vec<_> = playlist
-            .tracks
-            .values()
-            .filter(|track| {
-                !spotify_log
-                    .soundeo_track_ids
-                    .get(&track.spotify_track_id)
-                    .map_or(false, |opt| opt.is_some())
-            })
-            .cloned()
-            .collect();
-
-        if unresolved_tracks.is_empty() {
-            println!("\nNo tracks to resolve in this playlist. All are paired.");
-            return Ok(());
-        }
+        // This function now pairs and, upon successful pairing, queues the tracks.
+        playlist
+            .pair_unpaired_tracks(&mut soundeo_user)
+            .await
+            .change_context(SpotifyError)?;
 
         println!(
-            "\nFound {} unresolved tracks in '{}'. Starting interactive pairing...",
-            unresolved_tracks.len(),
-            playlist.name.cyan()
+            "{}",
+            "Pairing and queueing for unpaired tracks in the playlist is complete.".green()
         );
-
-        for (i, spotify_track) in unresolved_tracks.iter().enumerate() {
-            println!(
-                "\n({}/{}) Processing: {} by {}",
-                i + 1,
-                unresolved_tracks.len(),
-                spotify_track.title.yellow(),
-                spotify_track.artists.yellow()
-            );
-
-            // Check cache first
-            if let Some(cached_results) = spotify_log
-                .multiple_matches_cache
-                .get(&spotify_track.spotify_track_id)
-            {
-                println!(
-                    "  └─ Found {} cached potential matches for this track.",
-                    cached_results.len()
-                );
-
-                // --- Automatic selection logic for cached results ---
-                let mut auto_selected_result: Option<&SoundeoSearchBarResult> = None;
-
-                // Priority 1: Extended Mix
-                if let Some(extended_mix) = cached_results
-                    .iter()
-                    .find(|r| r.label.contains("(Extended Mix)"))
-                {
-                    println!(
-                        "  └─ {} Automatically selected cached 'Extended Mix' version: {}",
-                        "✔".green(),
-                        extended_mix.label.cyan()
-                    );
-                    auto_selected_result = Some(extended_mix);
-                }
-                // Priority 2: Original Mix
-                else if let Some(original_mix) = cached_results
-                    .iter()
-                    .find(|r| r.label.contains("(Original Mix)"))
-                {
-                    println!(
-                        "  └─ {} Automatically selected cached 'Original Mix' version: {}",
-                        "✔".green(),
-                        original_mix.label.cyan()
-                    );
-                    auto_selected_result = Some(original_mix);
-                }
-                // Priority 3: All labels are identical
-                else if cached_results.len() > 1
-                    && cached_results
-                        .iter()
-                        .all(|r| r.label == cached_results[0].label)
-                {
-                    println!(
-                        "  └─ {} Automatically selected a match as all cached options were identical.",
-                        "✔".green(),
-                    );
-                    auto_selected_result = Some(&cached_results[0]);
-                }
-
-                if let Some(chosen_result) = auto_selected_result {
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track.spotify_track_id.clone(),
-                        Some(chosen_result.value.clone()),
-                    )
-                    .change_context(SpotifyError)?;
-                    continue; // Move to the next track
-                }
-
-                let mut options: Vec<String> =
-                    cached_results.iter().map(|r| r.label.clone()).collect();
-                options.push("Skip this track".purple().to_string());
-
-                let selection = Dialoguer::select(
-                    "Select the correct match from the cache".to_string(),
-                    options.clone(),
-                    None,
-                )
-                .change_context(SpotifyError)?;
-
-                if selection < cached_results.len() {
-                    // User selected a match
-                    let chosen_result = &cached_results[selection];
-                    let soundeo_id = chosen_result.value.clone();
-                    println!(
-                        "  └─ {} Paired with: {}",
-                        "✔".green(),
-                        chosen_result.label.cyan()
-                    );
-
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track.spotify_track_id.clone(),
-                        Some(soundeo_id),
-                    )
-                    .change_context(SpotifyError)?;
-                } else {
-                    // User skipped, do not update the log so it can be reviewed again.
-                    println!("  └─ Skipped.");
-                }
-            } else {
-                // Not in cache, perform live interactive search
-                println!("  └─ No cached results. Searching Soundeo live...");
-                let soundeo_track_id_result =
-                    spotify_track.get_soundeo_track_id(&soundeo_user).await;
-
-                match soundeo_track_id_result {
-                    Ok(soundeo_id_option) => {
-                        if let Some(soundeo_id) = soundeo_id_option {
-                            // Only update if a track was actually selected.
-                            DjWizardLog::update_spotify_to_soundeo_track(
-                                spotify_track.spotify_track_id.clone(),
-                                Some(soundeo_id),
-                            )
-                            .change_context(SpotifyError)?;
-                            println!("  └─ {} Paired successfully.", "✔".green());
-                        } else {
-                            // User skipped, do not update the log.
-                            println!("  └─ Skipped.");
-                        }
-                    }
-                    Err(_) => {
-                        println!(
-                            "  └─ {} Error during live search for track: {}",
-                            "✖".red(),
-                            spotify_track.title.cyan()
-                        );
-                    }
-                }
-            }
-        }
-
-        println!("\n{}", "Manual pairing session complete.".green());
         Ok(())
     }
 
@@ -574,7 +466,9 @@ impl SpotifyCommands {
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to queue tracks from")?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let soundeo_ids: Vec<String> = playlist
+        let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
+
+        let all_paired_ids: Vec<String> = playlist
             .tracks
             .keys()
             .filter_map(|spotify_id| spotify_log.soundeo_track_ids.get(spotify_id))
@@ -582,7 +476,7 @@ impl SpotifyCommands {
             .cloned()
             .collect();
 
-        if soundeo_ids.is_empty() {
+        if all_paired_ids.is_empty() {
             println!(
                 "{}",
                 "No paired tracks found for this playlist. Please pair them first.".yellow()
@@ -590,30 +484,49 @@ impl SpotifyCommands {
             return Ok(());
         }
 
+        // Filter out tracks that are already downloaded
+        let soundeo_ids_to_queue: Vec<String> = all_paired_ids
+            .iter()
+            .filter(|soundeo_id| {
+                soundeo_log
+                    .tracks_info
+                    .get(*soundeo_id)
+                    .map_or(true, |track_info| !track_info.already_downloaded)
+            })
+            .cloned()
+            .collect();
+
+        let already_downloaded_count = all_paired_ids.len() - soundeo_ids_to_queue.len();
+
+        if soundeo_ids_to_queue.is_empty() {
+            println!(
+                "{}",
+                format!(
+                    "All {} paired tracks in this playlist have already been downloaded.",
+                    all_paired_ids.len()
+                )
+                .yellow()
+            );
+            return Ok(());
+        }
+
         println!(
-            "Found {} paired tracks in playlist '{}'.",
-            soundeo_ids.len(),
-            playlist.name.cyan()
+            "Found {} paired tracks in playlist '{}'. {} of them are not yet downloaded.",
+            all_paired_ids.len(),
+            playlist.name.cyan(),
+            soundeo_ids_to_queue.len().to_string().green()
         );
-
-        let priority_options = vec!["High (download first)", "Normal", "Low (download last)"];
-        let selection = Dialoguer::select(
-            "Choose a priority for these tracks".to_string(),
-            priority_options,
-            Some(1), // "Normal" as default
-        )
-        .change_context(SpotifyError)?;
-
-        let selected_priority = match selection {
-            0 => Priority::High,
-            1 => Priority::Normal,
-            _ => Priority::Low,
-        };
+        if already_downloaded_count > 0 {
+            println!(
+                "Skipping {} tracks that have already been downloaded.",
+                already_downloaded_count.to_string().yellow()
+            );
+        }
 
         let mut queued_count = 0;
         let mut skipped_count = 0;
-        for soundeo_id in soundeo_ids {
-            if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
+        for soundeo_id in soundeo_ids_to_queue {
+            if DjWizardLog::add_queued_track(soundeo_id, Priority::High)
                 .change_context(SpotifyError)?
             {
                 queued_count += 1;
@@ -626,7 +539,7 @@ impl SpotifyCommands {
             println!(
                 "Successfully queued {} new tracks with {} priority.",
                 queued_count.to_string().green(),
-                format!("{:?}", selected_priority).cyan()
+                format!("{:?}", Priority::High).cyan()
             );
         }
         if skipped_count > 0 {
@@ -1035,21 +948,8 @@ impl SpotifyCommands {
             return Ok(());
         }
 
-        // 3. Ask for priority
-        let priority_options = vec!["High (download first)", "Normal", "Low (download last)"];
-        let selection = Dialoguer::select(
-            "Choose a priority for these new tracks".to_string(),
-            priority_options,
-            Some(1), // "Normal" as default
-        )
-        .change_context(SpotifyError)?;
-
-        let selected_priority = match selection {
-            0 => Priority::High,
-            1 => Priority::Normal,
-            _ => Priority::Low,
-        };
-
+        // 3. Set priority to High as per new global rule
+        let selected_priority = Priority::High;
         // 4. Log into Soundeo and start processing
         println!("\nLogging into Soundeo to pair and queue tracks...");
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;

@@ -694,7 +694,7 @@ impl QueueCommands {
                 .change_context(QueueError)?;
 
             playlist
-                .pair_unpaired_tracks(&mut soundeo_user, Priority::High)
+                .pair_unpaired_tracks(&mut soundeo_user)
                 .await
                 .change_context(QueueError)?;
         }
