@@ -1,6 +1,7 @@
 use base64::Engine;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use comfy_table::{Cell, Color, Table};
 use error_stack::{IntoReport, Report, ResultExt};
 use inflector::Inflector;
 use rand::RngCore;
@@ -835,6 +836,19 @@ impl SpotifyCommands {
         Ok(())
     }
 
+    fn create_status_table() -> Table {
+        let mut table = Table::new();
+        table.set_header(vec![
+            "Playlist",
+            "Total",
+            "Downloaded",
+            "In Queue",
+            "Pending Pairing",
+            "No Match",
+        ]);
+        table
+    }
+
     fn get_playlists_status() -> SpotifyResult<()> {
         println!("\n--- Playlists Status Report ---");
 
@@ -854,6 +868,8 @@ impl SpotifyCommands {
 
         let mut playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
         playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        let mut table = Self::create_status_table();
 
         let mut total_tracks_count = 0;
         let mut total_downloaded = 0;
