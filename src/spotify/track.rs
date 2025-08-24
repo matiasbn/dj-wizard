@@ -1,5 +1,4 @@
 use colored::Colorize;
-use colorize::AnsiColor;
 use error_stack::ResultExt;
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +64,26 @@ impl SpotifyTrack {
                 self.get_track_url()
             );
             return Ok(None); // No downloadable tracks found at all.
+        }
+
+        // Check for multiple matches with identical names to auto-select.
+        if downloadable_tracks.len() > 1 {
+            let first_track_title = &downloadable_tracks[0].1.title;
+            let all_same_name = downloadable_tracks
+                .iter()
+                .all(|(_, track_info)| &track_info.title == first_track_title);
+
+            if all_same_name {
+                let chosen_track_info = &downloadable_tracks[0].1;
+                println!(
+                    "  └─ {} Automatically selected a match as all options had the same name: {} - {}",
+                    "✔".green(),
+                    chosen_track_info.title.cyan(),
+                    chosen_track_info.get_track_url().cyan()
+                );
+                // Since all are the same, we can just return the ID of the first one.
+                return Ok(Some(chosen_track_info.id.clone()));
+            }
         }
 
         let mut titles: Vec<String> = downloadable_tracks
