@@ -1,6 +1,6 @@
 use colored::Colorize;
 use colorize::AnsiColor;
-use error_stack::{IntoReport, Report, ResultExt};
+use error_stack::ResultExt;
 use serde::{Deserialize, Serialize};
 
 use crate::dialoguer::Dialoguer;
@@ -40,7 +40,7 @@ impl SpotifyTrack {
 
         if downloadable_tracks.len() == 1 {
             // Exactly one match, perfect for auto-pairing.
-            let (search_result, track_info) = &downloadable_tracks[0];
+            let (search_result, _track_info) = &downloadable_tracks[0];
             Ok(AutoPairResult::Paired(search_result.value.clone()))
         } else if downloadable_tracks.is_empty() {
             Ok(AutoPairResult::NoMatch)

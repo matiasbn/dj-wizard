@@ -5,7 +5,6 @@ use colored::Colorize;
 use error_stack::fmt::{Charset, ColorMode};
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use native_dialog::FileDialog;
-use url_list::commands::UrlListCommands;
 
 use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
@@ -14,6 +13,7 @@ use crate::log::DjWizardLog;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::commands::SpotifyCommands;
+use crate::url_list::commands::UrlListCommands;
 use crate::user::{SoundeoUser, User};
 
 mod backup;

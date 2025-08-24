@@ -5,7 +5,7 @@ use inflector::Inflector;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use strum::IntoEnumIterator;
@@ -385,8 +385,6 @@ impl SpotifyCommands {
     async fn queue_tracks_from_playlist() -> SpotifyResult<()> {
         let playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to queue tracks from")?;
-
-        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         let soundeo_ids: Vec<String> = playlist
