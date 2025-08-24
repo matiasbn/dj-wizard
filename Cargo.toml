@@ -41,7 +41,6 @@ google-drive3 = "5.0.4"
 async-trait = "0.1.80"
 anyhow = "1.0.99"
 walkdir = "2"
-walkdir = "2"
 
 [dev-dependencies]
 dotenvy = "0.15"

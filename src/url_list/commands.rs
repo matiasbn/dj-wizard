@@ -81,7 +81,7 @@ impl UrlListCommands {
         for (_, track_id) in track_list.track_ids.into_iter().enumerate() {
             let mut track = SoundeoTrack::new(track_id);
             track
-                .download_track(&mut soundeo_user, true)
+                .download_track(&mut soundeo_user, true, false)
                 .await
                 .change_context(UrlListError)?;
         }

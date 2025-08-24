@@ -1007,7 +1007,7 @@ impl SpotifyCommands {
 
         // Phase 2: Processing and Classification
         let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
-        let mut tracks_to_redownload: Vec<String> = Vec::new();
+        let mut tracks_to_force_redownload: Vec<SoundeoTrack> = Vec::new();
         let mut tracks_to_report_missing: HashMap<String, Vec<String>> = HashMap::new();
 
         println!("\nAnalyzing playlists and organizing files...");
@@ -1038,18 +1038,27 @@ impl SpotifyCommands {
                                     .into_report()
                                     .change_context(SpotifyError)?;
                             }
-                        } else if soundeo_track.already_downloaded {
-                            if !tracks_to_redownload.contains(soundeo_id) {
-                                tracks_to_redownload.push(soundeo_id.clone());
-                            }
                         } else {
-                            tracks_to_report_missing
-                                .entry(playlist.name.clone())
-                                .or_default()
-                                .push(format!(
-                                    "{} - {}",
-                                    spotify_track.artists, spotify_track.title
-                                ));
+                            // The file is genuinely missing from the disk.
+                            if soundeo_track.already_downloaded {
+                                // It was downloaded before, so we can re-download it.
+                                // Avoid duplicates in the redownload list.
+                                if !tracks_to_force_redownload
+                                    .iter()
+                                    .any(|t| &t.id == soundeo_id)
+                                {
+                                    tracks_to_force_redownload.push(soundeo_track.clone());
+                                }
+                            } else {
+                                // It was never downloaded, or not paired properly. Report it.
+                                tracks_to_report_missing
+                                    .entry(playlist.name.clone())
+                                    .or_default()
+                                    .push(format!(
+                                        "{} - {}",
+                                        spotify_track.artists, spotify_track.title
+                                    ));
+                            }
                         }
                     }
                 } else {
