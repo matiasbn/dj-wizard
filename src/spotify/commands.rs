@@ -69,6 +69,8 @@ pub struct SpotifyCli {
     PartialEq,
 )]
 pub enum SpotifyCommands {
+    /// Get a comprehensive status report for all playlists.
+    GetPlaylistsStatus,
     /// Download tracks from all playlists by automatically pairing single matches.
     DownloadFromAllPlaylists,
     /// Download tracks from one or more playlists by pairing them with Soundeo.
@@ -169,6 +171,7 @@ impl SpotifyCommands {
         };
 
         return match command_to_run {
+            SpotifyCommands::GetPlaylistsStatus => Self::get_playlists_status(),
             SpotifyCommands::DownloadFromAllPlaylists => Self::download_from_all_playlists().await,
             SpotifyCommands::AddNewPlaylistFromUrl => {
                 Self::add_new_playlist(&mut user_config).await
@@ -770,6 +773,80 @@ impl SpotifyCommands {
                 count.to_string().green(),
                 playlist.tracks.len()
             );
+        }
+
+        Ok(())
+    }
+
+    fn get_playlists_status() -> SpotifyResult<()> {
+        println!("\n--- Playlists Status Report ---");
+
+        // 1. Load all necessary data from the logs
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(SpotifyError)?;
+
+        if spotify_log.playlists.is_empty() {
+            println!("{}", "No playlists found in the log.".yellow());
+            return Ok(());
+        }
+
+        // 2. Prepare lookups for efficient checking
+        let queued_ids: HashSet<String> =
+            queued_tracks.iter().map(|t| t.track_id.clone()).collect();
+
+        let mut playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
+        playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        // 3. Iterate through each playlist and categorize its tracks
+        for playlist in playlists {
+            let mut downloaded = 0;
+            let mut queued = 0;
+            let mut pending_pairing = 0;
+            let mut no_match = 0;
+
+            for spotify_track in playlist.tracks.values() {
+                match spotify_log
+                    .soundeo_track_ids
+                    .get(&spotify_track.spotify_track_id)
+                {
+                    None => {
+                        // Not yet processed
+                        pending_pairing += 1;
+                    }
+                    Some(None) => {
+                        // Processed, but no single match found
+                        no_match += 1;
+                    }
+                    Some(Some(soundeo_id)) => {
+                        // Successfully paired, now check its status
+                        if soundeo_log
+                            .tracks_info
+                            .get(soundeo_id)
+                            .map_or(false, |info| info.already_downloaded)
+                        {
+                            downloaded += 1;
+                        }
+                        if queued_ids.contains(soundeo_id) {
+                            queued += 1;
+                        }
+                    }
+                }
+            }
+
+            // 4. Print the report for the current playlist
+            println!("\nPlaylist: {}", playlist.name.bright_blue().bold());
+            println!(
+                "  - Total Tracks:      {}",
+                playlist.tracks.len().to_string().white()
+            );
+            println!("  - Downloaded:        {}", downloaded.to_string().green());
+            println!("  - In Queue:          {}", queued.to_string().cyan());
+            println!(
+                "  - Pending Pairing:   {}",
+                pending_pairing.to_string().yellow()
+            );
+            println!("  - No Match Found:    {}", no_match.to_string().red());
         }
 
         Ok(())
