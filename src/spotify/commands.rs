@@ -654,11 +654,15 @@ impl SpotifyCommands {
         println!("Found {} playlists to process.", all_playlists.len());
 
         let mut newly_paired_soundeo_ids: Vec<String> = Vec::new();
-        let mut total_skipped = 0;
+        let mut any_tracks_failed_pairing = false;
 
         // 3. Iterate and auto-pair
         for playlist in all_playlists {
             println!("\nProcessing playlist: {}", playlist.name.yellow());
+
+            let mut paired_in_playlist = 0;
+            let mut skipped_in_playlist = 0;
+            let mut errors_in_playlist = 0;
 
             // Refetch the log inside the loop to get the most recent pairings
             // from previous playlists in this same run.
@@ -685,45 +689,97 @@ impl SpotifyCommands {
                 unpaired_tracks.len()
             );
 
-            for mut spotify_track in unpaired_tracks {
-                let result = spotify_track
-                    .find_single_soundeo_match(&soundeo_user)
-                    .await?;
+            let total_unpaired = unpaired_tracks.len();
+            for (i, mut spotify_track) in unpaired_tracks.into_iter().enumerate() {
+                let pairing_result = spotify_track.find_single_soundeo_match(&soundeo_user).await;
 
-                if let crate::spotify::track::AutoPairResult::Paired(soundeo_id) = result {
-                    println!(
-                        "    └─ {} Paired: {} - {}",
-                        "✔".green(),
-                        spotify_track.artists.cyan(),
-                        spotify_track.title.cyan()
-                    );
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track.spotify_track_id.clone(),
-                        Some(soundeo_id.clone()),
-                    )
-                    .change_context(SpotifyError)?;
-                    newly_paired_soundeo_ids.push(soundeo_id);
-                } else {
-                    total_skipped += 1;
+                match pairing_result {
+                    Ok(result) => match result {
+                        crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
+                            println!(
+                                "    └─ ({}/{}) {} Paired: {} - {}",
+                                format!("{}", i + 1).cyan(),
+                                format!("{}", total_unpaired).cyan(),
+                                "✔".green(),
+                                spotify_track.artists.cyan(),
+                                spotify_track.title.cyan()
+                            );
+                            DjWizardLog::update_spotify_to_soundeo_track(
+                                spotify_track.spotify_track_id.clone(),
+                                Some(soundeo_id.clone()),
+                            )
+                            .change_context(SpotifyError)?;
+                            newly_paired_soundeo_ids.push(soundeo_id);
+                            paired_in_playlist += 1;
+                        }
+                        crate::spotify::track::AutoPairResult::NoMatch => {
+                            println!(
+                                "    └─ ({}/{}) {} No match found for: {} - {}",
+                                format!("{}", i + 1).cyan(),
+                                format!("{}", total_unpaired).cyan(),
+                                "✖".yellow(),
+                                spotify_track.artists.cyan(),
+                                spotify_track.title.cyan()
+                            );
+                            skipped_in_playlist += 1;
+                            any_tracks_failed_pairing = true;
+                        }
+                        crate::spotify::track::AutoPairResult::MultipleMatches => {
+                            println!(
+                                "    └─ ({}/{}) {} Multiple matches for: {} - {}",
+                                format!("{}", i + 1).cyan(),
+                                format!("{}", total_unpaired).cyan(),
+                                "✖".yellow(),
+                                spotify_track.artists.cyan(),
+                                spotify_track.title.cyan()
+                            );
+                            skipped_in_playlist += 1;
+                            any_tracks_failed_pairing = true;
+                        }
+                    },
+                    Err(_) => {
+                        println!(
+                            "    └─ ({}/{}) {} Error pairing track: {}",
+                            format!("{}", i + 1).cyan(),
+                            format!("{}", total_unpaired).cyan(),
+                            "✖".red(),
+                            spotify_track.title.cyan()
+                        );
+                        errors_in_playlist += 1;
+                        any_tracks_failed_pairing = true;
+                    }
                 }
             }
+
+            println!(
+                "  └─ Playlist summary: {} Paired, {} Skipped, {} Errors.",
+                paired_in_playlist.to_string().green(),
+                skipped_in_playlist.to_string().yellow(),
+                errors_in_playlist.to_string().red()
+            );
         }
 
         // 4. Queue all newly paired tracks
         if newly_paired_soundeo_ids.is_empty() {
-            println!("\nNo new tracks were paired. Nothing to queue.");
+            println!("\nNo new tracks were successfully paired. Nothing to queue.");
+            if any_tracks_failed_pairing {
+                println!(
+                    "{}",
+                    "Some tracks could not be paired automatically. You can try pairing them using the 'Manually pair tracks' command.".yellow()
+                );
+            }
             return Ok(());
         }
 
         println!("\n--- Pairing Complete ---");
         println!(
-            "Successfully auto-paired {} new tracks.",
+            "Successfully auto-paired a total of {} new tracks.",
             newly_paired_soundeo_ids.len().to_string().green()
         );
-        if total_skipped > 0 {
+        if any_tracks_failed_pairing {
             println!(
-                "Skipped {} tracks (no single match found).",
-                total_skipped.to_string().yellow()
+                "{}",
+                "Some tracks could not be paired automatically. You can try pairing them using the 'Manually pair tracks' command.".yellow()
             );
         }
 
