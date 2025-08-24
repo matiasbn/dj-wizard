@@ -332,14 +332,27 @@ impl SpotifyPlaylist {
                 spotify_track.title.yellow(),
                 spotify_track.artists.yellow()
             );
-            let soundeo_id_option = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-            DjWizardLog::update_spotify_to_soundeo_track(
-                spotify_track_id,
-                soundeo_id_option.clone(),
-            )
-            .change_context(SpotifyError)?;
-            if let Some(id) = soundeo_id_option {
-                DjWizardLog::add_queued_track(id, Priority::High).change_context(SpotifyError)?;
+            let soundeo_id_result = spotify_track.get_soundeo_track_id(soundeo_user).await;
+
+            match soundeo_id_result {
+                Ok(soundeo_id_option) => {
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track_id,
+                        soundeo_id_option.clone(),
+                    )
+                    .change_context(SpotifyError)?;
+                    if let Some(id) = soundeo_id_option {
+                        DjWizardLog::add_queued_track(id, Priority::High)
+                            .change_context(SpotifyError)?;
+                    }
+                }
+                Err(_) => {
+                    println!(
+                        "  └─ {} Error reviewing track: {}",
+                        "✖".red(),
+                        spotify_track.title.cyan()
+                    );
+                }
             }
         }
 

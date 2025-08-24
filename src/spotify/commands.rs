@@ -23,6 +23,8 @@ use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
+use crate::spotify::track::AutoPairResult;
+use crate::spotify::track::SpotifyTrack;
 use crate::spotify::SpotifyCRUD;
 use crate::spotify::SpotifyError;
 use crate::spotify::SpotifyResult;
@@ -440,24 +442,102 @@ impl SpotifyCommands {
     }
 
     async fn pair_and_queue_unpaired_tracks() -> SpotifyResult<()> {
-        let mut playlist =
-            SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
+        let mut playlist = SpotifyPlaylist::prompt_select_playlist(
+            "Select a playlist to manually pair tracks from",
+        )?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
 
-        // This function now pairs and, upon successful pairing, queues the tracks.
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
+        let unpaired_tracks: Vec<_> = playlist
+            .tracks
+            .iter()
+            .filter(|(id, _)| !spotify_log.soundeo_track_ids.contains_key(*id))
+            .map(|(id, track)| (id.clone(), track.clone()))
+            .collect();
+
+        if unpaired_tracks.is_empty() {
+            println!("\nNo unpaired tracks found in '{}'.", playlist.name.cyan());
+            return Ok(());
+        }
+
+        println!(
+            "Found {} unpaired tracks in '{}'.",
+            unpaired_tracks.len().to_string().cyan(),
+            playlist.name.yellow()
+        );
+
+        // --- Phase 1: Automatic Pairing Pass ---
+        println!("\n--- Phase 1: Automatic Pairing Pass ---");
+        let mut paired_count = 0;
+        let mut needs_manual_review: Vec<(String, SpotifyTrack)> = Vec::new();
+
+        let unpaired_len = unpaired_tracks.len();
+        for (i, (spotify_track_id, mut spotify_track)) in unpaired_tracks.into_iter().enumerate() {
+            println!(
+                "Processing track {}/{}: {} by {}",
+                format!("{}", i + 1).cyan(),
+                format!("{}", unpaired_len).cyan(),
+                spotify_track.title.yellow(),
+                spotify_track.artists.yellow()
+            );
+            let result = spotify_track.find_single_soundeo_match(&soundeo_user).await;
+
+            match result {
+                Ok(pair_result) => match pair_result {
+                    AutoPairResult::Paired(soundeo_id) => {
+                        paired_count += 1;
+                        println!("  └─ {} Paired automatically.", "✔".green());
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track_id.clone(),
+                            Some(soundeo_id.clone()),
+                        )
+                        .change_context(SpotifyError)?;
+
+                        DjWizardLog::add_queued_track(soundeo_id, Priority::High)
+                            .change_context(SpotifyError)?;
+                    }
+                    AutoPairResult::NoMatch | AutoPairResult::MultipleMatches(_) => {
+                        println!("  └─ {} Needs manual review.", "…".yellow());
+                        needs_manual_review.push((spotify_track_id, spotify_track));
+                    }
+                },
+                Err(_) => {
+                    println!(
+                        "  └─ {} Error during search. Needs manual review.",
+                        "✖".red()
+                    );
+                    needs_manual_review.push((spotify_track_id, spotify_track));
+                }
+            }
+        }
+
+        println!(
+            "\nAutomatic pass complete. Paired and queued {} tracks.",
+            paired_count.to_string().green()
+        );
+
+        // --- Phase 2: Manual Pairing Pass ---
+        if needs_manual_review.is_empty() {
+            println!("{}", "No tracks require manual review.".green());
+            return Ok(());
+        }
+
+        println!("\n--- Phase 2: Manual Pairing Pass ---");
+        println!(
+            "There are {} tracks that need manual review. Starting interactive session...",
+            needs_manual_review.len().to_string().yellow()
+        );
+
         playlist
             .pair_unpaired_tracks(&mut soundeo_user)
             .await
             .change_context(SpotifyError)?;
 
-        println!(
-            "{}",
-            "Pairing and queueing for unpaired tracks in the playlist is complete.".green()
-        );
         Ok(())
     }
 
