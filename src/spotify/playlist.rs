@@ -248,31 +248,21 @@ impl SpotifyPlaylist {
             self.name.yellow()
         );
 
-        let auto_pair_single_only = Dialoguer::confirm(
-            "Do you want to automatically pair only tracks with a single match?".to_string(),
-            Some(true),
-        )
-        .change_context(SpotifyError)?;
+        println!("Starting auto-pairing process...");
+        let mut paired_count = 0;
+        let unpaired_len = unpaired_tracks.len();
+        for (i, (spotify_track_id, mut spotify_track)) in unpaired_tracks.into_iter().enumerate() {
+            println!(
+                "Processing track {}/{}: {} by {}",
+                format!("{}", i + 1).cyan(),
+                format!("{}", unpaired_len).cyan(),
+                spotify_track.title.yellow(),
+                spotify_track.artists.yellow()
+            );
+            let result = spotify_track.find_single_soundeo_match(soundeo_user).await;
 
-        if auto_pair_single_only {
-            println!("Starting auto-pairing for single-match tracks...");
-            let mut paired_count = 0;
-            let unpaired_len = unpaired_tracks.len();
-            for (i, (spotify_track_id, mut spotify_track)) in
-                unpaired_tracks.into_iter().enumerate()
-            {
-                println!(
-                    "Processing track {}/{}: {} by {}",
-                    format!("{}", i + 1).cyan(),
-                    format!("{}", unpaired_len).cyan(),
-                    spotify_track.title.yellow(),
-                    spotify_track.artists.yellow()
-                );
-                let result = spotify_track
-                    .find_single_soundeo_match(soundeo_user)
-                    .await?;
-
-                match result {
+            match result {
+                Ok(pair_result) => match pair_result {
                     AutoPairResult::Paired(soundeo_id) => {
                         paired_count += 1;
                         println!("  └─ {} Paired automatically.", "✔".green());
@@ -308,43 +298,20 @@ impl SpotifyPlaylist {
                         DjWizardLog::add_to_multiple_matches_cache(spotify_track_id, results)
                             .change_context(SpotifyError)?;
                     }
-                }
-            }
-            println!(
-                "\nPairing complete. Automatically paired {} new tracks.",
-                paired_count.to_string().green()
-            );
-        } else {
-            println!("Starting manual pairing process...");
-            let unpaired_len = unpaired_tracks.len();
-            for (i, (spotify_track_id, mut spotify_track)) in
-                unpaired_tracks.into_iter().enumerate()
-            {
-                println!(
-                    "Pairing track {}/{}: {} by {}",
-                    i + 1,
-                    unpaired_len,
-                    spotify_track.title.cyan(),
-                    spotify_track.artists.yellow()
-                );
-                let soundeo_track_id = spotify_track.get_soundeo_track_id(soundeo_user).await?;
-                DjWizardLog::update_spotify_to_soundeo_track(
-                    spotify_track_id,
-                    soundeo_track_id.clone(),
-                )
-                .change_context(SpotifyError)?;
-                if let Some(id) = soundeo_track_id {
-                    if DjWizardLog::add_queued_track(id, priority).change_context(SpotifyError)? {
-                        println!(
-                            "    └─ Added to download queue with {} priority.",
-                            format!("{:?}", priority).cyan()
-                        );
-                    } else {
-                        println!("    └─ Already in download queue.");
-                    }
+                },
+                Err(_) => {
+                    println!(
+                        "  └─ {} Error pairing track: {}",
+                        "✖".red(),
+                        spotify_track.title.cyan()
+                    );
                 }
             }
         }
+        println!(
+            "\nPairing complete. Automatically paired {} new tracks.",
+            paired_count.to_string().green()
+        );
 
         println!("{}", "Pairing complete.".green());
         Ok(())
