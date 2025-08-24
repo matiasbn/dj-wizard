@@ -25,6 +25,7 @@ pub enum QueueCommands {
     AddToQueueFromUrl,
     AddToQueueFromUrlList,
     DownloadOnlyAvailableTracks,
+    CleanDownloadedFromQueue,
 }
 
 impl QueueCommands {
@@ -49,6 +50,9 @@ impl QueueCommands {
                     .await
                     .change_context(QueueError)?;
                 Self::download_available_tracks(&mut soundeo_user).await
+            }
+            QueueCommands::CleanDownloadedFromQueue => {
+                Self::clean_downloaded_from_queue().change_context(QueueError)
             }
         };
     }
@@ -727,6 +731,52 @@ impl QueueCommands {
             );
         } else {
             DjWizardLog::promote_tracks_to_top(&track_ids_to_promote).change_context(QueueError)?;
+        }
+
+        Ok(())
+    }
+
+    fn clean_downloaded_from_queue() -> QueueResult<()> {
+        println!(
+            "\n{}",
+            "Cleaning already downloaded tracks from the queue...".yellow()
+        );
+
+        // 1. Get all necessary data from the log
+        let soundeo_log = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+
+        if queued_tracks.is_empty() {
+            println!(
+                "{}",
+                "The queue is already empty. Nothing to clean.".green()
+            );
+            return Ok(());
+        }
+
+        let mut removed_count = 0;
+
+        // 2. Iterate and remove
+        for queued_track in queued_tracks {
+            if let Some(track_info) = soundeo_log.tracks_info.get(&queued_track.track_id) {
+                if track_info.already_downloaded {
+                    if DjWizardLog::remove_queued_track(queued_track.track_id.clone())
+                        .change_context(QueueError)?
+                    {
+                        println!("  - Removing '{}'", track_info.title.cyan());
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+
+        if removed_count > 0 {
+            println!(
+                "\nSuccessfully removed {} downloaded tracks from the queue.",
+                removed_count.to_string().green()
+            );
+        } else {
+            println!("\nNo downloaded tracks were found in the queue. Nothing to remove.");
         }
 
         Ok(())
