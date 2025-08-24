@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "dj-wizard"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "Inflector",
  "anyhow",
@@ -665,6 +665,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "url 2.5.4",
+ "walkdir",
  "webbrowser",
 ]
 
