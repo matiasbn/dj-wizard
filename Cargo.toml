@@ -1,6 +1,6 @@
 [package]
 name = "dj-wizard"
-version = "0.1.27"
+version = "0.1.28"
 edition = "2021"
 description = "CLI for DJs"
 license = "MIT OR Apache-2.0"
