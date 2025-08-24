@@ -4,11 +4,11 @@ use std::fs::File;
 use std::io::Write;
 
 use colorize::AnsiColor;
-use error_stack::{FutureExt, IntoReport, Report, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::log::DjWizardLog;
 use crate::soundeo::api::SoundeoAPI;
@@ -62,7 +62,7 @@ impl SoundeoTrack {
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser, print: bool) -> SoundeoResult<()> {
-        let mut soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
+        let soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
         return match soundeo.tracks_info.get(&self.id) {
             Some(full_info) => {
                 self.clone_from(full_info);
@@ -153,13 +153,18 @@ impl SoundeoTrack {
         &mut self,
         soundeo_user: &mut SoundeoUser,
         print_remaining_downloads: bool,
+        force_redownload: bool,
     ) -> SoundeoResult<()> {
         // Get info
         self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded
         if self.already_downloaded {
-            self.print_already_downloaded();
-            return Ok(());
+            if force_redownload {
+                self.print_downloading_again();
+            } else {
+                self.print_already_downloaded();
+                return Ok(());
+            }
         }
 
         if !self.downloadable {
@@ -290,7 +295,10 @@ mod tests {
         let mut track = SoundeoTrack::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();
-        track.download_track(&mut soundeo_user, true).await.unwrap();
+        track
+            .download_track(&mut soundeo_user, true, false)
+            .await
+            .unwrap();
         println!("{:#?}", track);
     }
 }

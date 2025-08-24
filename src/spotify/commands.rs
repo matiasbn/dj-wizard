@@ -5,9 +5,13 @@ use inflector::Inflector;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use strum::IntoEnumIterator;
 use tiny_http::{Response, Server};
 use url::Url;
+use walkdir::WalkDir;
 use webbrowser;
 
 use crate::config::AppConfig;
@@ -15,6 +19,7 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
+use crate::soundeo::track::SoundeoTrack;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::{SoundeoUser, User};
@@ -52,6 +57,7 @@ pub enum SpotifyCommands {
     PrintDownloadedTracksByPlaylist,
     DeletePlaylists,
     CountQueuedTracksByPlaylist,
+    OrganizeDownloadsByPlaylist,
 }
 
 impl SpotifyCommands {
@@ -100,6 +106,9 @@ impl SpotifyCommands {
             }
             SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
             SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
+            SpotifyCommands::OrganizeDownloadsByPlaylist => {
+                Self::organize_downloads_by_playlist().await
+            }
         };
     }
 
@@ -376,8 +385,6 @@ impl SpotifyCommands {
     async fn queue_tracks_from_playlist() -> SpotifyResult<()> {
         let playlist =
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to queue tracks from")?;
-
-        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         let soundeo_ids: Vec<String> = playlist
@@ -801,8 +808,8 @@ impl SpotifyCommands {
 
     fn create_spotify_playlist_file() -> SpotifyResult<()> {
         let prompt_text = "Select the playlist to create the m3u8 file";
-        let playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
-        let mut file_content = "#EXTM3U";
+        let _playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
+        let _file_content = "#EXTM3U";
 
         Ok(())
     }
@@ -923,5 +930,204 @@ impl SpotifyCommands {
         );
 
         Ok(())
+    }
+
+    async fn organize_downloads_by_playlist() -> SpotifyResult<()> {
+        // Phase 1: Preparation and Selection
+        let mut user_config = User::new();
+        user_config
+            .read_config_file()
+            .change_context(SpotifyError)?;
+        let download_dir = PathBuf::from(&user_config.download_path);
+        if !download_dir.exists() {
+            println!(
+                "{}",
+                "Download directory not found. Nothing to organize.".yellow()
+            );
+            return Ok(());
+        }
+
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        if spotify_log.playlists.is_empty() {
+            println!(
+                "{}",
+                "No Spotify playlists found. Please sync or add a playlist first.".yellow()
+            );
+            return Ok(());
+        }
+
+        let mut local_playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
+        local_playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+        let playlist_names: Vec<String> = local_playlists.iter().map(|p| p.name.clone()).collect();
+        let defaults = vec![true; playlist_names.len()];
+
+        let selections = Dialoguer::multiselect(
+            "Select playlists to organize (all are selected by default, space to deselect)"
+                .to_string(),
+            playlist_names,
+            Some(&defaults),
+            false,
+        )
+        .change_context(SpotifyError)?;
+
+        if selections.is_empty() {
+            println!("No playlists selected. Operation cancelled.");
+            return Ok(());
+        }
+
+        let selected_playlists: Vec<SpotifyPlaylist> = selections
+            .iter()
+            .map(|&i| local_playlists[i].clone())
+            .collect();
+
+        // Scan local files recursively to build a master index
+        println!("\nScanning local download directory (recursively)...");
+        let mut local_files: HashMap<String, PathBuf> = HashMap::new();
+        for entry in WalkDir::new(&download_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(extension) = path.extension() {
+                    if extension == "AIFF" || extension == "aiff" {
+                        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                            local_files.insert(file_name.to_string(), path.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+        println!("Found {} local .AIFF files in total.", local_files.len());
+
+        // Phase 2: Processing and Classification
+        let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
+        let mut tracks_to_force_redownload: Vec<SoundeoTrack> = Vec::new();
+        let mut tracks_to_report_missing: HashMap<String, Vec<String>> = HashMap::new();
+
+        println!("\nAnalyzing playlists and organizing files...");
+
+        for playlist in selected_playlists {
+            let sanitized_playlist_name = Self::sanitize_filename(&playlist.name);
+            let playlist_folder_path = download_dir.join(&sanitized_playlist_name);
+            fs::create_dir_all(&playlist_folder_path)
+                .into_report()
+                .change_context(SpotifyError)?;
+
+            let mut present_songs_count = 0;
+
+            for spotify_track in playlist.tracks.values() {
+                if let Some(Some(soundeo_id)) = spotify_log
+                    .soundeo_track_ids
+                    .get(&spotify_track.spotify_track_id)
+                {
+                    if let Some(soundeo_track) = soundeo_log.tracks_info.get(soundeo_id) {
+                        let expected_filename = format!("{}.AIFF", soundeo_track.title);
+
+                        if let Some(source_path) = local_files.get(&expected_filename) {
+                            present_songs_count += 1;
+                            let dest_path = playlist_folder_path.join(&expected_filename);
+                            if !dest_path.exists() {
+                                fs::copy(source_path, &dest_path)
+                                    .into_report()
+                                    .change_context(SpotifyError)?;
+                            }
+                        } else {
+                            // The file is genuinely missing from the disk.
+                            if soundeo_track.already_downloaded {
+                                // It was downloaded before, so we can re-download it.
+                                // Avoid duplicates in the redownload list.
+                                if !tracks_to_force_redownload
+                                    .iter()
+                                    .any(|t| &t.id == soundeo_id)
+                                {
+                                    tracks_to_force_redownload.push(soundeo_track.clone());
+                                }
+                            } else {
+                                // It was never downloaded, or not paired properly. Report it.
+                                tracks_to_report_missing
+                                    .entry(playlist.name.clone())
+                                    .or_default()
+                                    .push(format!(
+                                        "{} - {}",
+                                        spotify_track.artists, spotify_track.title
+                                    ));
+                            }
+                        }
+                    }
+                } else {
+                    tracks_to_report_missing
+                        .entry(playlist.name.clone())
+                        .or_default()
+                        .push(format!(
+                            "{} - {}",
+                            spotify_track.artists, spotify_track.title
+                        ));
+                }
+            }
+
+            println!(
+                "{} of {} songs from playlist '{}' are available in the local playlist folder.",
+                present_songs_count.to_string().green(),
+                playlist.tracks.len(),
+                playlist.name.cyan()
+            );
+        }
+
+        // Phase 3: Actions and Reporting
+        println!("\n--- Organization Complete ---");
+
+        if tracks_to_report_missing.len() > 1 {
+            println!(
+                "\n{}",
+                "The following tracks need to be paired or downloaded for the first time.".yellow()
+            );
+            println!(
+                "Please use the '{}' or '{}' command.",
+                "Manually pair tracks".cyan(),
+                "Download from multiple playlists".cyan()
+            );
+            for (playlist_name, track_titles) in tracks_to_report_missing {
+                println!("\nPlaylist '{}':", playlist_name.yellow());
+                for title in track_titles {
+                    println!("- {}", title);
+                }
+            }
+        }
+
+        if !tracks_to_force_redownload.is_empty() {
+            println!(
+                "\nFound {} tracks that were previously downloaded but are missing locally.",
+                tracks_to_force_redownload.len().to_string().green()
+            );
+            println!("Starting re-download process automatically...");
+
+            let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
+            soundeo_user
+                .login_and_update_user_info()
+                .await
+                .change_context(SpotifyError)?;
+
+            for mut track in tracks_to_force_redownload {
+                // The `true` flag forces the re-download, ignoring the `already_downloaded` state.
+                if let Err(e) = track.download_track(&mut soundeo_user, true, true).await {
+                    println!(
+                        "Failed to re-download track '{}': {:?}",
+                        track.title.red(),
+                        e
+                    );
+                }
+            }
+            println!("\n{}", "Re-download process finished.".green());
+        }
+
+        Ok(())
+    }
+
+    fn sanitize_filename(name: &str) -> String {
+        name.chars()
+            .filter(|c| !matches!(*c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+            .collect()
     }
 }

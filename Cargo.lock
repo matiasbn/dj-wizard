@@ -665,6 +665,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "url 2.5.4",
+ "walkdir",
  "webbrowser",
 ]
 

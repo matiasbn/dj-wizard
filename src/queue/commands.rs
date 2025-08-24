@@ -1,6 +1,5 @@
-use clap::builder::Str;
 use colored::Colorize;
-use error_stack::{FutureExt, IntoReport, Report, ResultExt};
+use error_stack::{IntoReport, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -14,7 +13,6 @@ use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
 use crate::soundeo::Soundeo;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::spotify::SpotifyError;
 use crate::url_list::UrlListCRUD;
 use crate::user::SoundeoUser;
 
@@ -395,7 +393,7 @@ impl QueueCommands {
                 .await
                 .change_context(QueueError)?;
             return track_info
-                .download_track(&mut soundeo_user, true)
+                .download_track(&mut soundeo_user, true, false)
                 .await
                 .change_context(QueueError);
         }
@@ -430,7 +428,7 @@ impl QueueCommands {
             );
             let mut track_info = SoundeoTrack::new(available_id.clone());
             let download_result = track_info
-                .download_track(soundeo_user, false)
+                .download_track(soundeo_user, false, false)
                 .await
                 .change_context(QueueError);
             match download_result {

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::process::Termination;
 use std::{env, fmt};
 
 use clap::{Parser, Subcommand};
@@ -7,11 +5,6 @@ use colored::Colorize;
 use error_stack::fmt::{Charset, ColorMode};
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use native_dialog::FileDialog;
-use reqwest::{get, Client};
-use scraper::{ElementRef, Html, Selector};
-use serde_json::json;
-use url::{Host, Position, Url};
-use url_list::commands::UrlListCommands;
 
 use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
@@ -19,9 +12,8 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
-use crate::soundeo::track_list::SoundeoTracksList;
 use crate::spotify::commands::SpotifyCommands;
-use crate::spotify::playlist::SpotifyPlaylist;
+use crate::url_list::commands::UrlListCommands;
 use crate::user::{SoundeoUser, User};
 
 mod backup;
