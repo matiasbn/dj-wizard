@@ -153,13 +153,18 @@ impl SoundeoTrack {
         &mut self,
         soundeo_user: &mut SoundeoUser,
         print_remaining_downloads: bool,
+        force_redownload: bool,
     ) -> SoundeoResult<()> {
         // Get info
         self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded
         if self.already_downloaded {
-            self.print_already_downloaded();
-            return Ok(());
+            if force_redownload {
+                self.print_downloading_again();
+            } else {
+                self.print_already_downloaded();
+                return Ok(());
+            }
         }
 
         if !self.downloadable {
@@ -290,7 +295,10 @@ mod tests {
         let mut track = SoundeoTrack::new(track_id);
         let mut soundeo_user = SoundeoUser::new().unwrap();
         soundeo_user.login_and_update_user_info().await.unwrap();
-        track.download_track(&mut soundeo_user, true).await.unwrap();
+        track
+            .download_track(&mut soundeo_user, true, false)
+            .await
+            .unwrap();
         println!("{:#?}", track);
     }
 }

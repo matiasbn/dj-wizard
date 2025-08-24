@@ -149,5 +149,5 @@ To run the API integration tests, you need to set up your Spotify API credential
         * Prompts the user to select which playlists to organize (all are selected by default).
         * For each selected playlist, creates a subfolder.
         * Copies any locally found tracks belonging to that playlist into its respective folder.
-        * If a track is missing locally but was previously downloaded, it's automatically added to the high-priority download queue and the download process starts.
+        * If a track is missing locally but was previously downloaded (e.g., deleted manually), it is automatically re-downloaded directly, bypassing the queue.
         * If tracks are missing and were never downloaded, and this happens for more than one playlist, it will print a report asking the user to pair them manually.

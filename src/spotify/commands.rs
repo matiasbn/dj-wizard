@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use strum::IntoEnumIterator;
 use tiny_http::{Response, Server};
 use url::Url;
+use walkdir::WalkDir;
 use webbrowser;
 
 use crate::config::AppConfig;
@@ -18,6 +19,7 @@ use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
+use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::SoundeoCRUD;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
@@ -1090,24 +1092,30 @@ impl SpotifyCommands {
             }
         }
 
-        if !tracks_to_redownload.is_empty() {
+        if !tracks_to_force_redownload.is_empty() {
             println!(
-                "\nFound {} tracks that were previously downloaded but are missing locally. Adding them to the queue...",
-                tracks_to_redownload.len().to_string().green()
+                "\nFound {} tracks that were previously downloaded but are missing locally.",
+                tracks_to_force_redownload.len().to_string().green()
             );
+            println!("Starting re-download process automatically...");
 
-            for soundeo_id in &tracks_to_redownload {
-                DjWizardLog::reset_track_already_downloaded(soundeo_id.clone())
-                    .change_context(SpotifyError)?;
-                DjWizardLog::add_queued_track(soundeo_id.clone(), Priority::High)
-                    .change_context(SpotifyError)?;
-            }
-
-            println!("\nStarting download process automatically...");
-            QueueCommands::resume_queue(true)
+            let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
+            soundeo_user
+                .login_and_update_user_info()
                 .await
-                .change_context(SpotifyError)
-                .attach_printable("Failed to start the download queue.")?;
+                .change_context(SpotifyError)?;
+
+            for mut track in tracks_to_force_redownload {
+                // The `true` flag forces the re-download, ignoring the `already_downloaded` state.
+                if let Err(e) = track.download_track(&mut soundeo_user, true, true).await {
+                    println!(
+                        "Failed to re-download track '{}': {:?}",
+                        track.title.red(),
+                        e
+                    );
+                }
+            }
+            println!("\n{}", "Re-download process finished.".green());
         }
 
         Ok(())
