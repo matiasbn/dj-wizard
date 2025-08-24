@@ -399,24 +399,122 @@ impl SpotifyCommands {
     }
 
     async fn pair_and_queue_unpaired_tracks() -> SpotifyResult<()> {
-        let mut playlist =
-            SpotifyPlaylist::prompt_select_playlist("Select the playlist to download")?;
+        let playlist = SpotifyPlaylist::prompt_select_playlist(
+            "Select a playlist to manually pair tracks from",
+        )?;
         let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(SpotifyError)?;
 
-        // This function now pairs and, upon successful pairing, queues the tracks.
-        playlist
-            .pair_unpaired_tracks(&mut soundeo_user, Priority::Normal)
-            .await
-            .change_context(SpotifyError)?;
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
+        // Filter for tracks that are not successfully paired yet.
+        let unresolved_tracks: Vec<_> = playlist
+            .tracks
+            .values()
+            .filter(|track| {
+                !spotify_log
+                    .soundeo_track_ids
+                    .get(&track.spotify_track_id)
+                    .map_or(false, |opt| opt.is_some())
+            })
+            .cloned()
+            .collect();
+
+        if unresolved_tracks.is_empty() {
+            println!("\nNo tracks to resolve in this playlist. All are paired.");
+            return Ok(());
+        }
 
         println!(
-            "{}",
-            "Pairing and queueing for unpaired tracks in the playlist is complete.".green()
+            "\nFound {} unresolved tracks in '{}'. Starting interactive pairing...",
+            unresolved_tracks.len(),
+            playlist.name.cyan()
         );
+
+        for (i, spotify_track) in unresolved_tracks.iter().enumerate() {
+            println!(
+                "\n({}/{}) Processing: {} by {}",
+                i + 1,
+                unresolved_tracks.len(),
+                spotify_track.title.yellow(),
+                spotify_track.artists.yellow()
+            );
+
+            // Check cache first
+            if let Some(cached_results) = spotify_log
+                .multiple_matches_cache
+                .get(&spotify_track.spotify_track_id)
+            {
+                println!(
+                    "  └─ Found {} cached potential matches for this track.",
+                    cached_results.len()
+                );
+
+                let mut options: Vec<String> =
+                    cached_results.iter().map(|r| r.label.clone()).collect();
+                options.push("Skip this track".purple().to_string());
+
+                let selection = Dialoguer::select(
+                    "Select the correct match from the cache".to_string(),
+                    options.clone(),
+                    None,
+                )
+                .change_context(SpotifyError)?;
+
+                if selection < cached_results.len() {
+                    // User selected a match
+                    let chosen_result = &cached_results[selection];
+                    let soundeo_id = chosen_result.value.clone();
+                    println!(
+                        "  └─ {} Paired with: {}",
+                        "✔".green(),
+                        chosen_result.label.cyan()
+                    );
+
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track.spotify_track_id.clone(),
+                        Some(soundeo_id),
+                    )
+                    .change_context(SpotifyError)?;
+                } else {
+                    // User skipped
+                    println!("  └─ Skipped.");
+                }
+            } else {
+                // Not in cache, perform live interactive search
+                println!("  └─ No cached results. Searching Soundeo live...");
+                let soundeo_track_id_result =
+                    spotify_track.get_soundeo_track_id(&soundeo_user).await;
+
+                match soundeo_track_id_result {
+                    Ok(soundeo_id) => {
+                        // This will be Some(id) if user selected, or None if they skipped.
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track.spotify_track_id.clone(),
+                            soundeo_id.clone(),
+                        )
+                        .change_context(SpotifyError)?;
+                        if soundeo_id.is_some() {
+                            println!("  └─ {} Paired successfully.", "✔".green());
+                        } else {
+                            println!("  └─ Skipped.");
+                        }
+                    }
+                    Err(_) => {
+                        println!(
+                            "  └─ {} Error during live search for track: {}",
+                            "✖".red(),
+                            spotify_track.title.cyan()
+                        );
+                    }
+                }
+            }
+        }
+
+        println!("\n{}", "Manual pairing session complete.".green());
         Ok(())
     }
 
