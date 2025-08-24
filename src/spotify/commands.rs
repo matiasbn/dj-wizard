@@ -69,30 +69,32 @@ pub struct SpotifyCli {
     PartialEq,
 )]
 pub enum SpotifyCommands {
-    /// Get a comprehensive status report for all playlists.
-    GetPlaylistsStatus,
+    /// Sync (update) all locally stored playlists with Spotify.
+    SyncAllMyPlaylists,
     /// Download tracks from all playlists by automatically pairing single matches.
     DownloadFromAllPlaylists,
-    /// Download tracks from one or more playlists by pairing them with Soundeo.
-    DownloadFromMultiplePlaylists,
     /// Manually review and pair unpaired tracks from a specific playlist.
     ManuallyPairTracks,
-    /// Sync your public Spotify playlists with the local log.
-    SyncMyPublicPlaylists,
-    /// Add a new Spotify playlist to track by providing its URL.
-    AddNewPlaylistFromUrl,
-    /// Refresh the track list and metadata for an existing local playlist.
-    UpdatePlaylistData,
-    /// Add all paired tracks from a playlist to the download queue.
-    QueueTracksFromPlaylist,
-    /// Show a list of all downloaded tracks for a specific playlist.
-    PrintDownloadedTracksByPlaylist,
-    /// Remove one or more playlists from the local log.
-    DeletePlaylists,
-    /// Count how many tracks from a playlist are currently in the download queue.
-    CountQueuedTracksByPlaylist,
+    /// Download tracks from one or more playlists by pairing them with Soundeo.
+    DownloadFromMultiplePlaylists,
     /// Organize downloaded tracks into folders named after their playlists.
     OrganizeDownloadsByPlaylist,
+    /// Get a comprehensive status report for all playlists.
+    GetPlaylistsStatus,
+    /// Fetch your public Spotify playlists with the local log.
+    FetchMyPublicPlaylists,
+    /// Add a new Spotify playlist to track by providing its URL.
+    AddNewPlaylistFromUrl,
+    /// Remove one or more playlists from the local log.
+    DeletePlaylists,
+    // /// Refresh the track list and metadata for an existing local playlist.
+    // UpdatePlaylistData,
+    // /// Add all paired tracks from a playlist to the download queue.
+    // QueueTracksFromPlaylist,
+    // /// Count how many tracks from a playlist are currently in the download queue.
+    // CountQueuedTracksByPlaylist,
+    // /// Show a list of all downloaded tracks for a specific playlist.
+    // PrintDownloadedTracksByPlaylist,
 }
 
 impl SpotifyCommands {
@@ -171,25 +173,28 @@ impl SpotifyCommands {
         };
 
         return match command_to_run {
+            SpotifyCommands::SyncAllMyPlaylists => {
+                Self::sync_all_my_playlists(&mut user_config).await
+            }
             SpotifyCommands::GetPlaylistsStatus => Self::get_playlists_status(),
             SpotifyCommands::DownloadFromAllPlaylists => Self::download_from_all_playlists().await,
             SpotifyCommands::AddNewPlaylistFromUrl => {
                 Self::add_new_playlist(&mut user_config).await
             }
-            SpotifyCommands::UpdatePlaylistData => Self::update_playlist(&mut user_config).await,
-            SpotifyCommands::SyncMyPublicPlaylists => {
+            // SpotifyCommands::UpdatePlaylistData => Self::update_playlist(&mut user_config).await,
+            SpotifyCommands::FetchMyPublicPlaylists => {
                 Self::sync_public_playlists(&mut user_config).await
             }
             SpotifyCommands::ManuallyPairTracks => Self::pair_and_queue_unpaired_tracks().await,
-            SpotifyCommands::QueueTracksFromPlaylist => Self::queue_tracks_from_playlist().await,
-            SpotifyCommands::PrintDownloadedTracksByPlaylist => {
-                Self::print_downloaded_songs_by_playlist()
-            }
+            // SpotifyCommands::QueueTracksFromPlaylist => Self::queue_tracks_from_playlist().await,
+            // SpotifyCommands::PrintDownloadedTracksByPlaylist => {
+            //     Self::print_downloaded_songs_by_playlist()
+            // }
             SpotifyCommands::DownloadFromMultiplePlaylists => {
                 Self::download_from_multiple_playlists().await
             }
             SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
-            SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
+            // SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
             SpotifyCommands::OrganizeDownloadsByPlaylist => {
                 Self::organize_downloads_by_playlist().await
             }
@@ -441,6 +446,56 @@ impl SpotifyCommands {
         }
 
         println!("\n{}", "Sync complete.".green());
+        Ok(())
+    }
+
+    async fn sync_all_my_playlists(user_config: &mut User) -> SpotifyResult<()> {
+        println!("\nStarting to sync all locally stored playlists...");
+
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        if spotify_log.playlists.is_empty() {
+            println!("{}", "No playlists to sync. Add some first!".yellow());
+            return Ok(());
+        }
+
+        let playlists_to_sync: Vec<SpotifyPlaylist> =
+            spotify_log.playlists.values().cloned().collect();
+        let total_playlists = playlists_to_sync.len();
+
+        println!("Found {} playlists to sync.", total_playlists);
+
+        for (i, mut playlist) in playlists_to_sync.into_iter().enumerate() {
+            println!(
+                "\n({}/{}) Syncing playlist: {}",
+                i + 1,
+                total_playlists,
+                playlist.name.clone().cyan()
+            );
+
+            // The get_playlist_info function modifies the playlist in place
+            match playlist.get_playlist_info(user_config, false).await {
+                Ok(_) => {
+                    // Save the updated playlist back to the log
+                    DjWizardLog::update_spotify_playlist(playlist.clone())
+                        .change_context(SpotifyError)?;
+                    println!(
+                        "  └─ {} Successfully synced '{}'.",
+                        "✔".green(),
+                        playlist.name.green()
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "  └─ {} Failed to sync '{}'. Error: {:?}",
+                        "✖".red(),
+                        playlist.name.red(),
+                        e
+                    );
+                }
+            }
+        }
+
+        println!("\n{}", "All playlists have been processed.".green());
         Ok(())
     }
 
