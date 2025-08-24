@@ -64,6 +64,8 @@ pub struct SpotifyCli {
     PartialEq,
 )]
 pub enum SpotifyCommands {
+    /// Download tracks from all playlists by automatically pairing single matches.
+    DownloadFromAllPlaylists,
     /// Download tracks from one or more playlists by pairing them with Soundeo.
     DownloadFromMultiplePlaylists,
     /// Manually review and pair unpaired tracks from a specific playlist.
@@ -123,6 +125,7 @@ impl SpotifyCommands {
         };
 
         return match command_to_run {
+            SpotifyCommands::DownloadFromAllPlaylists => Self::download_from_all_playlists().await,
             SpotifyCommands::AddNewPlaylistFromUrl => {
                 Self::add_new_playlist(&mut user_config).await
             }
@@ -594,38 +597,19 @@ impl SpotifyCommands {
             return Ok(());
         }
 
-        // 2. Prepare data for efficient lookup
+        println!("\n--- Queued Tracks Report ---");
+
         let queued_soundeo_ids: std::collections::HashSet<String> =
             queued_tracks.iter().map(|t| t.track_id.clone()).collect();
 
-        // 3. Prompt user to select playlists
         let mut local_playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
         local_playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-        let playlist_names: Vec<String> = local_playlists.iter().map(|p| p.name.clone()).collect();
-
-        let selections = Dialoguer::multiselect(
-            "Select playlists to check against the queue (press space to select, enter to confirm)"
-                .to_string(),
-            playlist_names,
-            Some(&vec![false; local_playlists.len()]),
-            false,
-        )
-        .change_context(SpotifyError)?;
-
-        if selections.is_empty() {
-            println!("No playlists selected. Operation cancelled.");
-            return Ok(());
-        }
-
-        println!("\n--- Queued Tracks Report ---");
-
-        // 4. Process each selected playlist and print the count
-        for index in selections {
-            let selected_playlist = &local_playlists[index];
+        // Process each playlist and print the count
+        for playlist in local_playlists {
             let mut count = 0;
             // Iterate over each track in the selected Spotify playlist
-            for spotify_track_id in selected_playlist.tracks.keys() {
+            for spotify_track_id in playlist.tracks.keys() {
                 // Check if this Spotify track has a Soundeo track paired with it
                 if let Some(Some(soundeo_track_id)) =
                     spotify_log.soundeo_track_ids.get(spotify_track_id)
@@ -639,9 +623,134 @@ impl SpotifyCommands {
 
             println!(
                 "Playlist '{}': {} of {} tracks are in the queue.",
-                selected_playlist.name.cyan(),
+                playlist.name.cyan(),
                 count.to_string().green(),
-                selected_playlist.tracks.len()
+                playlist.tracks.len()
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn download_from_all_playlists() -> SpotifyResult<()> {
+        // 1. Login to Soundeo
+        println!("\nLogging into Soundeo to pair and queue tracks...");
+        let mut soundeo_user = SoundeoUser::new().change_context(SpotifyError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(SpotifyError)?;
+
+        // 2. Get all playlists
+        let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+        if spotify_log.playlists.is_empty() {
+            println!(
+                "{}",
+                "No Spotify playlists found. Please sync or add a playlist first.".yellow()
+            );
+            return Ok(());
+        }
+        let all_playlists: Vec<SpotifyPlaylist> = spotify_log.playlists.values().cloned().collect();
+        println!("Found {} playlists to process.", all_playlists.len());
+
+        let mut newly_paired_soundeo_ids: Vec<String> = Vec::new();
+        let mut total_skipped = 0;
+
+        // 3. Iterate and auto-pair
+        for playlist in all_playlists {
+            println!("\nProcessing playlist: {}", playlist.name.yellow());
+
+            // Refetch the log inside the loop to get the most recent pairings
+            // from previous playlists in this same run.
+            let current_spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
+
+            let unpaired_tracks: Vec<_> = playlist
+                .tracks
+                .values()
+                .filter(|track| {
+                    !current_spotify_log
+                        .soundeo_track_ids
+                        .contains_key(&track.spotify_track_id)
+                })
+                .cloned()
+                .collect();
+
+            if unpaired_tracks.is_empty() {
+                println!("  └─ No unpaired tracks found in this playlist.");
+                continue;
+            }
+
+            println!(
+                "  Found {} unpaired tracks. Attempting to auto-pair...",
+                unpaired_tracks.len()
+            );
+
+            for mut spotify_track in unpaired_tracks {
+                let result = spotify_track
+                    .find_single_soundeo_match(&soundeo_user)
+                    .await?;
+
+                if let crate::spotify::track::AutoPairResult::Paired(soundeo_id) = result {
+                    println!(
+                        "    └─ {} Paired: {} - {}",
+                        "✔".green(),
+                        spotify_track.artists.cyan(),
+                        spotify_track.title.cyan()
+                    );
+                    DjWizardLog::update_spotify_to_soundeo_track(
+                        spotify_track.spotify_track_id.clone(),
+                        Some(soundeo_id.clone()),
+                    )
+                    .change_context(SpotifyError)?;
+                    newly_paired_soundeo_ids.push(soundeo_id);
+                } else {
+                    total_skipped += 1;
+                }
+            }
+        }
+
+        // 4. Queue all newly paired tracks
+        if newly_paired_soundeo_ids.is_empty() {
+            println!("\nNo new tracks were paired. Nothing to queue.");
+            return Ok(());
+        }
+
+        println!("\n--- Pairing Complete ---");
+        println!(
+            "Successfully auto-paired {} new tracks.",
+            newly_paired_soundeo_ids.len().to_string().green()
+        );
+        if total_skipped > 0 {
+            println!(
+                "Skipped {} tracks (no single match found).",
+                total_skipped.to_string().yellow()
+            );
+        }
+
+        println!("Adding newly paired tracks to the queue with High priority...");
+        let mut queued_count = 0;
+        for soundeo_id in newly_paired_soundeo_ids {
+            if DjWizardLog::add_queued_track(soundeo_id, Priority::High)
+                .change_context(SpotifyError)?
+            {
+                queued_count += 1;
+            }
+        }
+
+        // 5. Start download
+        if queued_count > 0 {
+            println!(
+                "\nSuccessfully queued {} new tracks.",
+                queued_count.to_string().green()
+            );
+            println!("Starting download process automatically...");
+            QueueCommands::resume_queue(true)
+                .await
+                .change_context(SpotifyError)
+                .attach_printable("Failed to start the download queue.")?;
+        } else {
+            println!(
+                "\nAll newly paired tracks were already in the queue. No new downloads started."
             );
         }
 

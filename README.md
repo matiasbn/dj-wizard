@@ -144,6 +144,12 @@ To run the API integration tests, you need to set up your Spotify API credential
         * Lists previously added playlists.
         * Prompts the user to select a playlist.
         * Intended to create an M3U8 (or similar) playlist file based on the downloaded tracks for that Spotify playlist.
+    * **Download From All Playlists:**
+        * Scans all locally saved Spotify playlists.
+        * For every unpaired track, it attempts to find a single, unambiguous match on Soundeo.
+        * Tracks with a single match are automatically paired and added to the download queue with High priority.
+        * Tracks with no matches or multiple matches are skipped.
+        * After processing all playlists, it automatically starts the download queue.
     * **Organize Downloads By Playlist:**
         * Scans the main download directory.
         * Prompts the user to select which playlists to organize (all are selected by default).
