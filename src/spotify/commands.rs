@@ -20,7 +20,6 @@ use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
-use crate::soundeo::SoundeoCRUD;
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{SpotifyCRUD, SpotifyError, SpotifyResult};
 use crate::user::{SoundeoUser, User};
@@ -811,8 +810,8 @@ impl SpotifyCommands {
 
     fn create_spotify_playlist_file() -> SpotifyResult<()> {
         let prompt_text = "Select the playlist to create the m3u8 file";
-        let playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
-        let mut file_content = "#EXTM3U";
+        let _playlist = SpotifyPlaylist::prompt_select_playlist(prompt_text)?;
+        let _file_content = "#EXTM3U";
 
         Ok(())
     }
@@ -984,26 +983,25 @@ impl SpotifyCommands {
             .map(|&i| local_playlists[i].clone())
             .collect();
 
-        // Scan local files
-        println!("\nScanning local download directory...");
-        let mut local_files = HashSet::new();
-        for entry in fs::read_dir(&download_dir)
-            .into_report()
-            .change_context(SpotifyError)?
+        // Scan local files recursively to build a master index
+        println!("\nScanning local download directory (recursively)...");
+        let mut local_files: HashMap<String, PathBuf> = HashMap::new();
+        for entry in WalkDir::new(&download_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
         {
-            let entry = entry.into_report().change_context(SpotifyError)?;
             let path = entry.path();
             if path.is_file() {
                 if let Some(extension) = path.extension() {
                     if extension == "AIFF" || extension == "aiff" {
                         if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                            local_files.insert(file_name.to_string());
+                            local_files.insert(file_name.to_string(), path.to_path_buf());
                         }
                     }
                 }
             }
         }
-        println!("Found {} local .AIFF files.", local_files.len());
+        println!("Found {} local .AIFF files in total.", local_files.len());
 
         // Phase 2: Processing and Classification
         let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
@@ -1029,12 +1027,11 @@ impl SpotifyCommands {
                     if let Some(soundeo_track) = soundeo_log.tracks_info.get(soundeo_id) {
                         let expected_filename = format!("{}.AIFF", soundeo_track.title);
 
-                        if local_files.contains(&expected_filename) {
+                        if let Some(source_path) = local_files.get(&expected_filename) {
                             present_songs_count += 1;
-                            let source_path = download_dir.join(&expected_filename);
                             let dest_path = playlist_folder_path.join(&expected_filename);
                             if !dest_path.exists() {
-                                fs::copy(&source_path, &dest_path)
+                                fs::copy(source_path, &dest_path)
                                     .into_report()
                                     .change_context(SpotifyError)?;
                             }

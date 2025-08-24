@@ -4,11 +4,11 @@ use std::fs::File;
 use std::io::Write;
 
 use colorize::AnsiColor;
-use error_stack::{FutureExt, IntoReport, Report, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::log::DjWizardLog;
 use crate::soundeo::api::SoundeoAPI;
@@ -62,7 +62,7 @@ impl SoundeoTrack {
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser, print: bool) -> SoundeoResult<()> {
-        let mut soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
+        let soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
         return match soundeo.tracks_info.get(&self.id) {
             Some(full_info) => {
                 self.clone_from(full_info);
