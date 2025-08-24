@@ -74,7 +74,7 @@ pub enum SpotifyCommands {
     /// Download tracks from all playlists by automatically pairing single matches.
     DownloadFromAllPlaylists,
     /// Manually review and pair unpaired tracks from a specific playlist.
-    ManuallyPairTracks,
+    ManuallyPairTracksSpotifyWithSoundeoTracks,
     /// Download tracks from one or more playlists by pairing them with Soundeo.
     DownloadFromMultiplePlaylists,
     /// Organize downloaded tracks into folders named after their playlists.
@@ -185,7 +185,9 @@ impl SpotifyCommands {
             SpotifyCommands::FetchMyPublicPlaylists => {
                 Self::sync_public_playlists(&mut user_config).await
             }
-            SpotifyCommands::ManuallyPairTracks => Self::pair_and_queue_unpaired_tracks().await,
+            SpotifyCommands::ManuallyPairTracksSpotifyWithSoundeoTracks => {
+                Self::pair_and_queue_unpaired_tracks().await
+            }
             // SpotifyCommands::QueueTracksFromPlaylist => Self::queue_tracks_from_playlist().await,
             // SpotifyCommands::PrintDownloadedTracksByPlaylist => {
             //     Self::print_downloaded_songs_by_playlist()
