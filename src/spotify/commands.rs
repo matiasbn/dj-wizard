@@ -75,10 +75,10 @@ pub enum SpotifyCommands {
     DownloadFromAllPlaylists,
     /// Manually review and pair unpaired tracks from a specific playlist.
     ManuallyPairSpotifyTracksWithSoundeoTracks,
+    /// Organize downloaded tracks into folders, one for each playlist.
+    OrganizeDownloadedTracksByPlaylistInFolders,
     /// Download tracks from one or more playlists by pairing them with Soundeo.
     DownloadFromMultiplePlaylists,
-    /// Organize downloaded tracks into folders named after their playlists.
-    OrganizeDownloadsByPlaylist,
     /// Get a comprehensive status report for all playlists.
     GetPlaylistsStatus,
     /// Fetch your public Spotify playlists with the local log.
@@ -197,8 +197,8 @@ impl SpotifyCommands {
             }
             SpotifyCommands::DeletePlaylists => Self::delete_playlists(),
             // SpotifyCommands::CountQueuedTracksByPlaylist => Self::count_queued_tracks_by_playlist(),
-            SpotifyCommands::OrganizeDownloadsByPlaylist => {
-                Self::organize_downloads_by_playlist().await
+            SpotifyCommands::OrganizeDownloadedTracksByPlaylistInFolders => {
+                Self::organize_by_playlist().await
             }
         };
     }
@@ -1427,7 +1427,7 @@ impl SpotifyCommands {
         Ok(())
     }
 
-    async fn organize_downloads_by_playlist() -> SpotifyResult<()> {
+    async fn organize_by_playlist() -> SpotifyResult<()> {
         // Phase 1: Preparation and Selection
         let mut user_config = User::new();
         user_config
