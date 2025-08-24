@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose, Engine as _};
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
 use inflector::Inflector;
@@ -46,22 +47,47 @@ struct PaginatedPlaylistsResponse {
     next: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
+#[derive(Parser, Debug, Clone, PartialEq)]
+pub struct SpotifyCli {
+    #[command(subcommand)]
+    pub command: Option<SpotifyCommands>,
+}
+
+#[derive(
+    Debug,
+    Deserialize,
+    Serialize,
+    Clone,
+    strum_macros::Display,
+    strum_macros::EnumIter,
+    Subcommand,
+    PartialEq,
+)]
 pub enum SpotifyCommands {
+    /// Download tracks from one or more playlists by pairing them with Soundeo.
     DownloadFromMultiplePlaylists,
+    /// Manually review and pair unpaired tracks from a specific playlist.
     ManuallyPairTracks,
+    /// Sync your public Spotify playlists with the local log.
     SyncMyPublicPlaylists,
+    /// Add a new Spotify playlist to track by providing its URL.
     AddNewPlaylistFromUrl,
+    /// Refresh the track list and metadata for an existing local playlist.
     UpdatePlaylistData,
+    /// Add all paired tracks from a playlist to the download queue.
     QueueTracksFromPlaylist,
+    /// Show a list of all downloaded tracks for a specific playlist.
     PrintDownloadedTracksByPlaylist,
+    /// Remove one or more playlists from the local log.
     DeletePlaylists,
+    /// Count how many tracks from a playlist are currently in the download queue.
     CountQueuedTracksByPlaylist,
+    /// Organize downloaded tracks into folders named after their playlists.
     OrganizeDownloadsByPlaylist,
 }
 
 impl SpotifyCommands {
-    pub async fn execute() -> SpotifyResult<()> {
+    pub async fn execute(cli: Option<SpotifyCli>) -> SpotifyResult<()> {
         let mut user_config = User::new();
         user_config
             .read_config_file()
@@ -85,10 +111,18 @@ impl SpotifyCommands {
             }
         }
 
-        let options = Self::get_options();
-        let selection =
-            Dialoguer::select("Select".to_string(), options, None).change_context(SpotifyError)?;
-        return match Self::get_selection(selection) {
+        let command_to_run = match cli.and_then(|c| c.command) {
+            Some(command) => command,
+            None => {
+                // No subcommand given, show interactive menu
+                let options = Self::get_options();
+                let selection = Dialoguer::select("Select".to_string(), options, None)
+                    .change_context(SpotifyError)?;
+                Self::get_selection(selection)
+            }
+        };
+
+        return match command_to_run {
             SpotifyCommands::AddNewPlaylistFromUrl => {
                 Self::add_new_playlist(&mut user_config).await
             }
@@ -145,8 +179,8 @@ impl SpotifyCommands {
                         stored.name.clone().yellow()
                     ))
                     .attach(Suggestion(format!(
-                        "Update the playlist by running {} and update selecting the correct option",
-                        DjWizardCommands::Spotify.cli_command().yellow()
+                        "Update the playlist by running '{}' and select the update option",
+                        "dj-wizard spotify".yellow()
                     ))));
             }
             None => {
