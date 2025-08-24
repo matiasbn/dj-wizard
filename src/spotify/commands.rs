@@ -74,7 +74,7 @@ pub enum SpotifyCommands {
     /// Download tracks from all playlists by automatically pairing single matches.
     DownloadFromAllPlaylists,
     /// Manually review and pair unpaired tracks from a specific playlist.
-    ManuallyPairTracksSpotifyWithSoundeoTracks,
+    ManuallyPairSpotifyWithSoundeoTracks,
     /// Download tracks from one or more playlists by pairing them with Soundeo.
     DownloadFromMultiplePlaylists,
     /// Organize downloaded tracks into folders named after their playlists.
