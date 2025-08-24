@@ -1,20 +1,43 @@
 use std::u32;
 
-use error_stack::{FutureExt, IntoReport, ResultExt};
+use error_stack::{IntoReport, ResultExt};
+use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
-use strum_macros::Display;
+use std::fmt;
 
 use crate::soundeo::api::SoundeoAPI;
 use crate::soundeo::{SoundeoError, SoundeoResult};
 use crate::user::SoundeoUser;
 
-fn deserialize_to_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+fn deserialize_value_to_string<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let number: u32 = u32::deserialize(deserializer)?;
-    Ok(format!("{number}"))
+    struct StringOrNumVisitor;
+
+    impl<'de> Visitor<'de> for StringOrNumVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("string or number")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrNumVisitor)
 }
 
 #[derive(Debug, Deserialize, Clone, strum_macros::Display)]
@@ -58,7 +81,7 @@ impl SoundeoSearchBar {
 pub struct SoundeoSearchBarResult {
     pub label: String,
     pub category: String,
-    #[serde(deserialize_with = "deserialize_to_string")]
+    #[serde(deserialize_with = "deserialize_value_to_string")]
     pub value: String,
 }
 

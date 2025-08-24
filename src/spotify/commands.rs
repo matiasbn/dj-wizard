@@ -1,3 +1,4 @@
+use base64::Engine;
 use base64::{engine::general_purpose, Engine as _};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -694,49 +695,66 @@ impl SpotifyCommands {
                 let pairing_result = spotify_track.find_single_soundeo_match(&soundeo_user).await;
 
                 match pairing_result {
-                    Ok(result) => match result {
-                        crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
-                            println!(
-                                "    └─ ({}/{}) {} Paired: {} - {}",
-                                format!("{}", i + 1).cyan(),
-                                format!("{}", total_unpaired).cyan(),
-                                "✔".green(),
-                                spotify_track.artists.cyan(),
-                                spotify_track.title.cyan()
-                            );
-                            DjWizardLog::update_spotify_to_soundeo_track(
-                                spotify_track.spotify_track_id.clone(),
-                                Some(soundeo_id.clone()),
-                            )
-                            .change_context(SpotifyError)?;
-                            newly_paired_soundeo_ids.push(soundeo_id);
-                            paired_in_playlist += 1;
-                        }
-                        crate::spotify::track::AutoPairResult::NoMatch => {
-                            println!(
-                                "    └─ ({}/{}) {} No match found for: {} - {}",
-                                format!("{}", i + 1).cyan(),
-                                format!("{}", total_unpaired).cyan(),
-                                "✖".yellow(),
-                                spotify_track.artists.cyan(),
-                                spotify_track.title.cyan()
-                            );
-                            skipped_in_playlist += 1;
-                            any_tracks_failed_pairing = true;
-                        }
-                        crate::spotify::track::AutoPairResult::MultipleMatches => {
-                            println!(
-                                "    └─ ({}/{}) {} Multiple matches for: {} - {}",
-                                format!("{}", i + 1).cyan(),
-                                format!("{}", total_unpaired).cyan(),
-                                "✖".yellow(),
-                                spotify_track.artists.cyan(),
-                                spotify_track.title.cyan()
-                            );
-                            skipped_in_playlist += 1;
-                            any_tracks_failed_pairing = true;
-                        }
-                    },
+                    Ok(result) => {
+                        match result {
+                            crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
+                                println!(
+                                    "    └─ ({}/{}) {} Paired: {} - {}",
+                                    format!("{}", i + 1).cyan(),
+                                    format!("{}", total_unpaired).cyan(),
+                                    "✔".green(),
+                                    spotify_track.artists.cyan(),
+                                    spotify_track.title.cyan()
+                                );
+                                DjWizardLog::update_spotify_to_soundeo_track(
+                                    spotify_track.spotify_track_id.clone(),
+                                    Some(soundeo_id.clone()),
+                                )
+                                .change_context(SpotifyError)?;
+                                newly_paired_soundeo_ids.push(soundeo_id);
+                                paired_in_playlist += 1;
+                            }
+                            crate::spotify::track::AutoPairResult::NoMatch => {
+                                println!(
+                                    "    └─ ({}/{}) {} No match found for: {} - {}",
+                                    format!("{}", i + 1).cyan(),
+                                    format!("{}", total_unpaired).cyan(),
+                                    "✖".yellow(),
+                                    spotify_track.artists.cyan(),
+                                    spotify_track.title.cyan()
+                                );
+                                DjWizardLog::update_spotify_to_soundeo_track(
+                                    spotify_track.spotify_track_id.clone(),
+                                    None,
+                                )
+                                .change_context(SpotifyError)?;
+                                skipped_in_playlist += 1;
+                                any_tracks_failed_pairing = true;
+                            }
+                            crate::spotify::track::AutoPairResult::MultipleMatches(results) => {
+                                println!(
+                                    "    └─ ({}/{}) {} Multiple matches for: {} - {}",
+                                    format!("{}", i + 1).cyan(),
+                                    format!("{}", total_unpaired).cyan(),
+                                    "✖".yellow(),
+                                    spotify_track.artists.cyan(),
+                                    spotify_track.title.cyan()
+                                );
+                                DjWizardLog::update_spotify_to_soundeo_track(
+                                    spotify_track.spotify_track_id.clone(),
+                                    None,
+                                )
+                                .change_context(SpotifyError)?;
+                                DjWizardLog::add_to_multiple_matches_cache(
+                                    spotify_track.spotify_track_id.clone(),
+                                    results,
+                                )
+                                .change_context(SpotifyError)?;
+                                skipped_in_playlist += 1;
+                                any_tracks_failed_pairing = true;
+                            }
+                        };
+                    }
                     Err(_) => {
                         println!(
                             "    └─ ({}/{}) {} Error pairing track: {}",
@@ -942,32 +960,41 @@ impl SpotifyCommands {
                     .await
                     .change_context(SpotifyError)?;
 
-                if let crate::spotify::track::AutoPairResult::Paired(soundeo_id) = result {
-                    println!("      └─ {} Paired automatically.", "✔".green());
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track.spotify_track_id.clone(),
-                        Some(soundeo_id.clone()),
-                    )
-                    .change_context(SpotifyError)?;
+                match result {
+                    crate::spotify::track::AutoPairResult::Paired(soundeo_id) => {
+                        println!("      └─ {} Paired automatically.", "✔".green());
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track.spotify_track_id.clone(),
+                            Some(soundeo_id.clone()),
+                        )
+                        .change_context(SpotifyError)?;
 
-                    if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
-                        .change_context(SpotifyError)?
-                    {
-                        println!(
-                            "        └─ Added to download queue with {} priority.",
-                            format!("{:?}", selected_priority).cyan()
-                        );
-                        total_queued += 1;
-                        queued_for_this_playlist += 1;
-                    } else {
-                        println!("        └─ Already in download queue.");
+                        if DjWizardLog::add_queued_track(soundeo_id, selected_priority)
+                            .change_context(SpotifyError)?
+                        {
+                            println!(
+                                "        └─ Added to download queue with {} priority.",
+                                format!("{:?}", selected_priority).cyan()
+                            );
+                            total_queued += 1;
+                            queued_for_this_playlist += 1;
+                        } else {
+                            println!("        └─ Already in download queue.");
+                        }
                     }
-                } else {
-                    println!(
-                        "      └─ {} Not auto-paired (multiple matches or no match found).",
-                        "✖".red()
-                    );
-                    total_failed += 1;
+                    _ => {
+                        println!(
+                            "      └─ {} Not auto-paired (multiple matches or no match found).",
+                            "✖".red()
+                        );
+                        // Mark as processed so we don't check it again in this flow
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track.spotify_track_id.clone(),
+                            None,
+                        )
+                        .change_context(SpotifyError)?;
+                        total_failed += 1;
+                    }
                 }
 
                 if queued_for_this_playlist >= num_to_queue {

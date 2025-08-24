@@ -1,13 +1,10 @@
 use std::collections::HashMap;
-use std::env;
 
 use crate::dialoguer::Dialoguer;
 use crate::log::DjWizardLog;
 use crate::log::Priority;
 use crate::Suggestion;
-use base64::{engine::general_purpose, Engine as _};
 use colored::Colorize;
-use dotenvy::dotenv;
 use error_stack::{IntoReport, Report, ResultExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -275,30 +272,42 @@ impl SpotifyPlaylist {
                     .find_single_soundeo_match(soundeo_user)
                     .await?;
 
-                if let AutoPairResult::Paired(soundeo_id) = result {
-                    paired_count += 1;
-                    println!("  └─ {} Paired automatically.", "✔".green());
-                    DjWizardLog::update_spotify_to_soundeo_track(
-                        spotify_track_id,
-                        Some(soundeo_id.clone()),
-                    )
-                    .change_context(SpotifyError)?;
+                match result {
+                    AutoPairResult::Paired(soundeo_id) => {
+                        paired_count += 1;
+                        println!("  └─ {} Paired automatically.", "✔".green());
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track_id,
+                            Some(soundeo_id.clone()),
+                        )
+                        .change_context(SpotifyError)?;
 
-                    if DjWizardLog::add_queued_track(soundeo_id, priority)
-                        .change_context(SpotifyError)?
-                    {
-                        println!(
-                            "    └─ Added to download queue with {} priority.",
-                            format!("{:?}", priority).cyan()
-                        );
-                    } else {
-                        println!("    └─ Already in download queue.");
+                        if DjWizardLog::add_queued_track(soundeo_id, priority)
+                            .change_context(SpotifyError)?
+                        {
+                            println!(
+                                "    └─ Added to download queue with {} priority.",
+                                format!("{:?}", priority).cyan()
+                            );
+                        } else {
+                            println!("    └─ Already in download queue.");
+                        }
                     }
-                } else {
-                    println!(
-                        "  └─ {} Not auto-paired (multiple matches or no match found).",
-                        "✖".red()
-                    );
+                    AutoPairResult::NoMatch => {
+                        println!("  └─ {} No match found.", "✖".red());
+                        DjWizardLog::update_spotify_to_soundeo_track(spotify_track_id, None)
+                            .change_context(SpotifyError)?;
+                    }
+                    AutoPairResult::MultipleMatches(results) => {
+                        println!("  └─ {} Multiple matches found.", "✖".red());
+                        DjWizardLog::update_spotify_to_soundeo_track(
+                            spotify_track_id.clone(),
+                            None,
+                        )
+                        .change_context(SpotifyError)?;
+                        DjWizardLog::add_to_multiple_matches_cache(spotify_track_id, results)
+                            .change_context(SpotifyError)?;
+                    }
                 }
             }
             println!(

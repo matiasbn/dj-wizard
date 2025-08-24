@@ -13,7 +13,7 @@ use crate::user::SoundeoUser;
 pub enum AutoPairResult {
     Paired(String), // Contains the Soundeo track ID
     NoMatch,
-    MultipleMatches,
+    MultipleMatches(Vec<SoundeoSearchBarResult>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -36,7 +36,8 @@ impl SpotifyTrack {
         &mut self,
         soundeo_user: &SoundeoUser,
     ) -> SpotifyResult<AutoPairResult> {
-        let downloadable_tracks = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
+        let (downloadable_tracks, all_search_results) =
+            find_downloadable_soundeo_tracks(self, soundeo_user).await?;
 
         if downloadable_tracks.len() == 1 {
             // Exactly one match, perfect for auto-pairing.
@@ -46,7 +47,7 @@ impl SpotifyTrack {
             Ok(AutoPairResult::NoMatch)
         } else {
             // Zero or more than one match, requires manual intervention.
-            Ok(AutoPairResult::MultipleMatches)
+            Ok(AutoPairResult::MultipleMatches(all_search_results))
         }
     }
 
@@ -54,7 +55,7 @@ impl SpotifyTrack {
         &self,
         soundeo_user: &SoundeoUser,
     ) -> SpotifyResult<Option<String>> {
-        let downloadable_tracks = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
+        let (downloadable_tracks, _) = find_downloadable_soundeo_tracks(self, soundeo_user).await?;
 
         if downloadable_tracks.is_empty() {
             println!(
@@ -114,19 +115,22 @@ impl SpotifyTrack {
 async fn find_downloadable_soundeo_tracks(
     spotify_track: &SpotifyTrack,
     soundeo_user: &SoundeoUser,
-) -> SpotifyResult<Vec<(SoundeoSearchBarResult, SoundeoTrack)>> {
+) -> SpotifyResult<(
+    Vec<(SoundeoSearchBarResult, SoundeoTrack)>,
+    Vec<SoundeoSearchBarResult>,
+)> {
     let term = spotify_track.get_track_search_term();
-    let results = SoundeoSearchBar::Tracks
+    let search_results = SoundeoSearchBar::Tracks
         .search_term(term, soundeo_user)
         .await
         .change_context(SpotifyError)?;
 
-    if results.is_empty() {
-        return Ok(vec![]);
+    if search_results.is_empty() {
+        return Ok((vec![], vec![]));
     }
 
     let mut downloadable_results = vec![];
-    for result in results {
+    for result in &search_results {
         let id = result.value.clone();
         let mut full_info = SoundeoTrack::new(id);
         full_info
@@ -134,9 +138,9 @@ async fn find_downloadable_soundeo_tracks(
             .await
             .change_context(SpotifyError)?;
         if full_info.downloadable {
-            downloadable_results.push((result, full_info));
+            downloadable_results.push((result.clone(), full_info));
         }
     }
 
-    Ok(downloadable_results)
+    Ok((downloadable_results, search_results))
 }

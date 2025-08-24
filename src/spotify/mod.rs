@@ -1,17 +1,14 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use colorize::AnsiColor;
-use error_stack::{IntoReport, ResultExt};
-use inflector::Inflector;
+use error_stack::IntoReport;
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
-use url::Url;
 
 use crate::dialoguer::Dialoguer;
-use crate::log::{DjWizardLog, DjWizardLogResult};
+use crate::log::DjWizardLog;
+use crate::log::DjWizardLogResult;
+use crate::soundeo::search_bar::SoundeoSearchBarResult;
 use crate::spotify::playlist::SpotifyPlaylist;
-use crate::user::SoundeoUser;
 
 pub mod api;
 pub mod commands;
@@ -35,6 +32,8 @@ pub type SpotifyResult<T> = error_stack::Result<T, SpotifyError>;
 pub struct Spotify {
     pub playlists: HashMap<String, SpotifyPlaylist>,
     pub soundeo_track_ids: HashMap<String, Option<String>>,
+    #[serde(default)]
+    pub multiple_matches_cache: HashMap<String, Vec<SoundeoSearchBarResult>>,
 }
 
 impl Spotify {
@@ -42,6 +41,7 @@ impl Spotify {
         Self {
             playlists: HashMap::new(),
             soundeo_track_ids: HashMap::new(),
+            multiple_matches_cache: HashMap::new(),
         }
     }
 
@@ -65,4 +65,9 @@ pub trait SpotifyCRUD {
     ) -> DjWizardLogResult<()>;
 
     fn delete_spotify_playlists(playlist_ids: &[String]) -> DjWizardLogResult<()>;
+
+    fn add_to_multiple_matches_cache(
+        spotify_id: String,
+        results: Vec<SoundeoSearchBarResult>,
+    ) -> DjWizardLogResult<()>;
 }

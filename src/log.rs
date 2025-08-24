@@ -1,19 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{read_to_string, File};
-use std::io::Cursor;
+use std::fs::read_to_string;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
 use crate::url_list::UrlListCRUD;
-use crate::DjWizardError;
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
 use reqwest::blocking::multipart::Form;
 use reqwest::blocking::Client;
-use serde::{de::Error, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::soundeo::search_bar::SoundeoSearchBarResult;
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::{Soundeo, SoundeoCRUD};
 use crate::spotify::playlist::SpotifyPlaylist;
@@ -147,7 +146,7 @@ impl DjWizardLog {
                 }
             }
 
-            let mut log: Self = serde_json::from_value(json_value).into_report().attach_printable("Failed to deserialize log file after attempting migration. The log file might be corrupted.").change_context(DjWizardLogError)?;
+            let log: Self = serde_json::from_value(json_value).into_report().attach_printable("Failed to deserialize log file after attempting migration. The log file might be corrupted.").change_context(DjWizardLogError)?;
 
             if migration_performed {
                 log.save_log()?;
@@ -458,6 +457,17 @@ impl SpotifyCRUD for DjWizardLog {
             log.save_log()?;
         }
         Ok(())
+    }
+
+    fn add_to_multiple_matches_cache(
+        spotify_id: String,
+        results: Vec<SoundeoSearchBarResult>,
+    ) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.spotify
+            .multiple_matches_cache
+            .insert(spotify_id, results);
+        log.save_log()
     }
 }
 
