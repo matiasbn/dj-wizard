@@ -32,6 +32,15 @@ use crate::spotify::SpotifyResult;
 use crate::user::{SoundeoUser, User};
 use crate::Suggestion;
 
+struct PlaylistStatusRow {
+    name: String,
+    total: usize,
+    downloaded: usize,
+    queued: usize,
+    pending_pairing: usize,
+    no_match: usize,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct TracksInfo {
     href: String,
@@ -836,7 +845,7 @@ impl SpotifyCommands {
         Ok(())
     }
 
-    fn create_status_table() -> Table {
+    fn print_status_table(rows: Vec<PlaylistStatusRow>) {
         let mut table = Table::new();
         table.set_header(vec![
             "Playlist",
@@ -846,12 +855,47 @@ impl SpotifyCommands {
             "Pending Pairing",
             "No Match",
         ]);
-        table
+
+        let mut total_tracks_count = 0;
+        let mut total_downloaded = 0;
+        let mut total_queued = 0;
+        let mut total_pending_pairing = 0;
+        let mut total_no_match = 0;
+
+        for row in rows {
+            table.add_row(vec![
+                Cell::new(row.name).fg(Color::Blue),
+                Cell::new(row.total),
+                Cell::new(row.downloaded).fg(Color::Green),
+                Cell::new(row.queued).fg(Color::Cyan),
+                Cell::new(row.pending_pairing).fg(Color::Yellow),
+                Cell::new(row.no_match).fg(Color::Red),
+            ]);
+            total_tracks_count += row.total;
+            total_downloaded += row.downloaded;
+            total_queued += row.queued;
+            total_pending_pairing += row.pending_pairing;
+            total_no_match += row.no_match;
+        }
+
+        // Add a separator line before the total
+        table.add_row(vec!["---", "---", "---", "---", "---", "---"]);
+
+        // Add the grand total summary row
+        table.add_row(vec![
+            Cell::new("GRAND TOTAL").fg(Color::White),
+            Cell::new(total_tracks_count),
+            Cell::new(total_downloaded).fg(Color::Green),
+            Cell::new(total_queued).fg(Color::Cyan),
+            Cell::new(total_pending_pairing).fg(Color::Yellow),
+            Cell::new(total_no_match).fg(Color::Red),
+        ]);
+
+        println!("\n--- Playlists Status Report ---");
+        println!("{table}");
     }
 
     fn get_playlists_status() -> SpotifyResult<()> {
-        println!("\n--- Playlists Status Report ---");
-
         // 1. Load all necessary data from the logs
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
         let soundeo_log = DjWizardLog::get_soundeo().change_context(SpotifyError)?;
@@ -869,13 +913,7 @@ impl SpotifyCommands {
         let mut playlists: Vec<_> = spotify_log.playlists.values().cloned().collect();
         playlists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-        let mut table = Self::create_status_table();
-
-        let mut total_tracks_count = 0;
-        let mut total_downloaded = 0;
-        let mut total_queued = 0;
-        let mut total_pending_pairing = 0;
-        let mut total_no_match = 0;
+        let mut status_rows: Vec<PlaylistStatusRow> = Vec::new();
 
         // 3. Iterate through each playlist and categorize its tracks
         for playlist in playlists {
@@ -913,46 +951,17 @@ impl SpotifyCommands {
                 }
             }
 
-            total_tracks_count += playlist.tracks.len();
-            total_downloaded += downloaded;
-            total_queued += queued;
-            total_pending_pairing += pending_pairing;
-            total_no_match += no_match;
-
-            // 4. Print the report for the current playlist
-            println!("\nPlaylist: {}", playlist.name.bright_blue().bold());
-            println!(
-                "  - Total Tracks:      {}",
-                playlist.tracks.len().to_string().white()
-            );
-            println!("  - Downloaded:        {}", downloaded.to_string().green());
-            println!("  - In Queue:          {}", queued.to_string().cyan());
-            println!(
-                "  - Pending Pairing:   {}",
-                pending_pairing.to_string().yellow()
-            );
-            println!("  - No Match Found:    {}", no_match.to_string().red());
+            status_rows.push(PlaylistStatusRow {
+                name: playlist.name,
+                total: playlist.tracks.len(),
+                downloaded,
+                queued,
+                pending_pairing,
+                no_match,
+            });
         }
 
-        // 5. Print the grand total summary
-        println!("\n--- Grand Total Summary ---");
-        println!(
-            "  - Total Tracks:      {}",
-            total_tracks_count.to_string().white()
-        );
-        println!(
-            "  - Downloaded:        {}",
-            total_downloaded.to_string().green()
-        );
-        println!("  - In Queue:          {}", total_queued.to_string().cyan());
-        println!(
-            "  - Pending Pairing:   {}",
-            total_pending_pairing.to_string().yellow()
-        );
-        println!(
-            "  - No Match Found:    {}",
-            total_no_match.to_string().red()
-        );
+        Self::print_status_table(status_rows);
 
         Ok(())
     }
