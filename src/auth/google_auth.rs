@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use colored::Colorize;
+use error_stack::{IntoReport, ResultExt};
 use oauth2::basic::BasicClient;
 use oauth2::reqwest::async_http_client;
 use oauth2::{
@@ -33,26 +34,28 @@ impl GoogleAuth {
         // Create OAuth2 client - reading client secret from environment variable
         // TODO: Fix this properly - Google shouldn't require client secret for Desktop apps with PKCE
         let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
-            .map_err(|_| {
-                println!("{}", "❌ Error: GOOGLE_CLIENT_SECRET environment variable not set".red());
-                println!("{}", "Please set it with:".yellow());
-                println!("{}", "echo 'export GOOGLE_CLIENT_SECRET=\"your_secret_here\"' >> ~/.zshrc && source ~/.zshrc".blue());
-                AuthError
-            })?;
-        
+            .into_report()
+            .attach_printable("❌ Error: GOOGLE_CLIENT_SECRET environment variable not set")
+            .attach_printable("Please set it with:")
+            .attach_printable("echo 'export GOOGLE_CLIENT_SECRET=\"your_secret_here\"' >> ~/.zshrc && source ~/.zshrc")
+            .change_context(AuthError::new("Request error"))?;
+
         let client = BasicClient::new(
             ClientId::new(AppConfig::GOOGLE_OAUTH_CLIENT_ID.to_string()),
             Some(ClientSecret::new(client_secret)),
             AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-                .map_err(|_| AuthError)?,
+                .into_report()
+                .change_context(AuthError::new("Auth URL parse error"))?,
             Some(
                 TokenUrl::new("https://oauth2.googleapis.com/token".to_string())
-                    .map_err(|_| AuthError)?,
+                    .into_report()
+                    .change_context(AuthError::new("Token URL parse error"))?,
             ),
         )
         .set_redirect_uri(
             RedirectUrl::new("http://localhost:8080/callback".to_string())
-                .map_err(|_| AuthError)?,
+                .into_report()
+                .change_context(AuthError::new("Redirect URL parse error"))?,
         );
 
         // Generate PKCE challenge (this replaces the client secret)
@@ -97,10 +100,9 @@ impl GoogleAuth {
             .set_pkce_verifier(pkce_verifier)
             .request_async(async_http_client)
             .await
-            .map_err(|e| {
-                println!("Token exchange failed: {:?}", e);
-                AuthError
-            })?;
+            .into_report()
+            .attach_printable("Token exchange failed")
+            .change_context(AuthError::new("Token exchange error"))?;
 
         println!("✅ Token exchange successful!");
 
@@ -140,7 +142,8 @@ impl GoogleAuth {
     async fn start_callback_server() -> AuthResult<(String, String)> {
         use tiny_http::{Header, Response, Server};
 
-        let server = Server::http("localhost:8080").map_err(|_| AuthError)?;
+        let server = Server::http("localhost:8080")
+            .map_err(|e| AuthError::new(&format!("Failed to start server: {}", e)))?;
 
         println!("Waiting for authentication callback on http://localhost:8080/callback");
 
@@ -150,7 +153,7 @@ impl GoogleAuth {
         loop {
             if start.elapsed() > timeout {
                 println!("{}", "Authentication timeout!".red());
-                return Err(AuthError);
+                return Err(AuthError::new("Authentication timeout")).into_report();
             }
 
             // Try to receive request with timeout
@@ -260,39 +263,58 @@ impl GoogleAuth {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|_| AuthError)?;
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
 
-        let user_info: GoogleUserInfo = response.json().await.map_err(|_| AuthError)?;
+        let user_info: GoogleUserInfo = response
+            .json()
+            .await
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
 
         Ok(user_info)
     }
 
     fn save_token(&self, token: &AuthToken) -> AuthResult<()> {
         // Save to local file in user's home directory
-        let home_dir = dirs::home_dir().ok_or(AuthError)?;
+        let home_dir = dirs::home_dir()
+            .ok_or(AuthError::new("Could not find home directory"))
+            .into_report()?;
         let token_path = home_dir.join(".dj-wizard").join("auth_token.json");
 
         // Create directory if it doesn't exist
-        std::fs::create_dir_all(token_path.parent().unwrap()).map_err(|_| AuthError)?;
+        std::fs::create_dir_all(token_path.parent().unwrap())
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
 
         // Save token
-        let token_json = serde_json::to_string_pretty(token).map_err(|_| AuthError)?;
-        std::fs::write(token_path, token_json).map_err(|_| AuthError)?;
+        let token_json = serde_json::to_string_pretty(token)
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
+        std::fs::write(token_path, token_json)
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
 
         Ok(())
     }
 
     pub fn load_token() -> AuthResult<AuthToken> {
-        let home_dir = dirs::home_dir().ok_or(AuthError)?;
+        let home_dir = dirs::home_dir()
+            .ok_or(AuthError::new("Could not find home directory"))
+            .into_report()?;
         let token_path = home_dir.join(".dj-wizard").join("auth_token.json");
 
-        let token_json = std::fs::read_to_string(token_path).map_err(|_| AuthError)?;
-        let token: AuthToken = serde_json::from_str(&token_json).map_err(|_| AuthError)?;
+        let token_json = std::fs::read_to_string(token_path)
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
+        let token: AuthToken = serde_json::from_str(&token_json)
+            .into_report()
+            .change_context(AuthError::new("Request error"))?;
 
         // Check if token is expired
         if token.expires_at < chrono::Utc::now() {
             println!("{}", "Token expired, please login again".yellow());
-            return Err(AuthError);
+            return Err(AuthError::new("Token expired")).into_report();
         }
 
         Ok(token)
