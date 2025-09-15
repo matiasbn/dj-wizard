@@ -19,6 +19,7 @@ use crate::url_list::commands::UrlListCommands;
 use crate::user::{SoundeoUser, User};
 
 mod artist;
+mod auth;
 mod backup;
 mod cleaner;
 mod config;
@@ -54,6 +55,8 @@ struct Cli {
 /// A simple program to download all files from a search in soundeo
 #[derive(Subcommand, Debug, PartialEq, Clone)]
 enum DjWizardCommands {
+    /// Authenticate with Google for cloud sync
+    Auth,
     /// Stores the Soundeo credentials
     Login,
     /// Stores the IPFS credentials
@@ -87,6 +90,22 @@ enum DjWizardCommands {
 impl DjWizardCommands {
     pub async fn execute(&self) -> DjWizardResult<()> {
         return match self {
+            DjWizardCommands::Auth => {
+                use crate::auth::google_auth::GoogleAuth;
+                
+                let google_auth = GoogleAuth::new();
+                let result = google_auth.login().await;
+                match result {
+                    Ok(_token) => {
+                        println!("Authentication successful! Your data will now sync to the cloud.");
+                        Ok(())
+                    }
+                    Err(_) => {
+                        println!("Authentication failed. Please try again.");
+                        Err(DjWizardError).into_report()
+                    }
+                }
+            }
             DjWizardCommands::Login => {
                 let mut soundeo_user_config = User::new();
                 let prompt_text = format!("Soundeo user: ");
@@ -222,6 +241,9 @@ impl DjWizardCommands {
 
     pub fn cli_command(&self) -> String {
         match self {
+            DjWizardCommands::Auth => {
+                format!("dj-wizard auth")
+            }
             DjWizardCommands::Login => {
                 format!("dj-wizard login")
             }
