@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::artist::{ArtistCRUD, ArtistManager};
 use crate::url_list::UrlListCRUD;
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
@@ -58,6 +59,8 @@ pub struct DjWizardLog {
     pub soundeo: Soundeo,
     #[serde(default)]
     pub genre_tracker: GenreTracker,
+    #[serde(default)]
+    pub artist_manager: ArtistManager,
 }
 
 impl DjWizardLog {
@@ -174,6 +177,7 @@ impl DjWizardLog {
                 available_tracks: HashSet::new(),
                 url_list: HashSet::new(),
                 genre_tracker: GenreTracker::new(),
+                artist_manager: ArtistManager::new(),
             }
         };
         Ok(soundeo_log)
@@ -520,6 +524,25 @@ impl GenreTrackerCRUD for DjWizardLog {
             .into_report()
             .change_context(DjWizardLogError)?
             .as_secs();
+        log.save_log()?;
+        Ok(())
+    }
+}
+
+impl ArtistCRUD for DjWizardLog {
+    fn get_artist_manager() -> DjWizardLogResult<ArtistManager> {
+        let log = Self::read_log()?;
+        Ok(log.artist_manager)
+    }
+
+    fn save_artist_manager(manager: ArtistManager) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        log.artist_manager = manager;
         log.save_log()?;
         Ok(())
     }

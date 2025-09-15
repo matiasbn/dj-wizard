@@ -6,6 +6,7 @@ use error_stack::fmt::{Charset, ColorMode};
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use native_dialog::FileDialog;
 
+use crate::artist::commands::ArtistCommands;
 use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
@@ -17,6 +18,7 @@ use crate::spotify::commands::{SpotifyCli, SpotifyCommands};
 use crate::url_list::commands::UrlListCommands;
 use crate::user::{SoundeoUser, User};
 
+mod artist;
 mod backup;
 mod cleaner;
 mod config;
@@ -78,6 +80,8 @@ enum DjWizardCommands {
     Backup,
     /// Track available tracks by genre
     GenreTracker,
+    /// Manage favorite artists
+    Artist,
 }
 
 impl DjWizardCommands {
@@ -209,6 +213,10 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
+            DjWizardCommands::Artist => {
+                ArtistCommands::execute()
+                    .change_context(DjWizardError)
+            }
         };
     }
 
@@ -243,6 +251,9 @@ impl DjWizardCommands {
             }
             DjWizardCommands::GenreTracker => {
                 format!("dj-wizard genre-tracker")
+            }
+            DjWizardCommands::Artist => {
+                format!("dj-wizard artist")
             }
         }
     }
