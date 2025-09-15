@@ -174,22 +174,7 @@ impl ArtistCommands {
         artists.sort_by(|a, b| a.name.cmp(&b.name));
 
         for (i, artist) in artists.iter().enumerate() {
-            println!("\n{}. {}", i + 1, artist.name.green().bold());
-
-            if artist.genres.is_empty() {
-                println!("   {}: {}", "Genres".cyan(), "None".yellow());
-            } else {
-                println!(
-                    "   {}: {}",
-                    "Genres".cyan(),
-                    artist.genres.join(", ").blue()
-                );
-            }
-
-            println!("   {}: {}", "Added".cyan(), artist.created_at.white());
-            if artist.created_at != artist.last_updated {
-                println!("   {}: {}", "Updated".cyan(), artist.last_updated.white());
-            }
+            println!("{}. {}", i + 1, artist.name.green());
         }
 
         println!(
@@ -216,13 +201,7 @@ impl ArtistCommands {
         // Select artist to remove
         let artist_options: Vec<String> = sorted_artists
             .iter()
-            .map(|artist| {
-                if artist.genres.is_empty() {
-                    artist.name.clone()
-                } else {
-                    format!("{} ({})", artist.name, artist.genres.join(", "))
-                }
-            })
+            .map(|artist| artist.name.clone())
             .collect();
 
         let mut options_with_cancel = artist_options.clone();
