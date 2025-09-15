@@ -4,9 +4,9 @@ version = "0.1.28"
 edition = "2021"
 description = "CLI for DJs"
 license = "MIT OR Apache-2.0"
-documentation = "https://www.github.com/matiasbn/dj-wizard"
-homepage = "https://www.github.com/matiasbn/dj-wizard"
-repository = "https://www.github.com/matiasbn/dj-wizard"
+documentation = "https://github.com/matiasbn/dj-wizard"
+homepage = "https://github.com/matiasbn/dj-wizard"
+repository = "https://github.com/matiasbn/dj-wizard"
 rust-version = "1.78"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
