@@ -17,7 +17,8 @@ use crate::user::SoundeoUser;
 
 #[derive(Debug, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum GenreTrackerCommands {
-    UpdateFollowedGenre,
+    QueueTracksFromFollowedGenre,
+    UpdateFollowedGenreDate,
     FollowNewGenre,
     ViewFollowedGenres,
     RemoveFollowedGenre,
@@ -159,7 +160,12 @@ impl GenreTrackerCommands {
 
         match Self::get_selection(selection) {
             GenreTrackerCommands::FollowNewGenre => Self::follow_new_genre().await,
-            GenreTrackerCommands::UpdateFollowedGenre => Self::update_followed_genre().await,
+            GenreTrackerCommands::QueueTracksFromFollowedGenre => {
+                Self::queue_tracks_from_followed_genre().await
+            }
+            GenreTrackerCommands::UpdateFollowedGenreDate => {
+                Self::update_followed_genre_date().await
+            }
             GenreTrackerCommands::ViewFollowedGenres => Self::view_followed_genres(),
             GenreTrackerCommands::RemoveFollowedGenre => Self::remove_followed_genre(),
         }
@@ -246,7 +252,7 @@ impl GenreTrackerCommands {
         Ok(())
     }
 
-    async fn update_followed_genre() -> GenreTrackerResult<()> {
+    async fn queue_tracks_from_followed_genre() -> GenreTrackerResult<()> {
         let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
 
         if tracker.tracked_genres.is_empty() {
@@ -305,6 +311,16 @@ impl GenreTrackerCommands {
             start_date.cyan(),
             end_date.cyan()
         );
+
+        // Show the Soundeo URL for user reference
+        let tracker_for_url = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+        let sample_url = tracker_for_url.build_soundeo_url(genre_id, &start_date, &end_date, 1);
+        println!(
+            "\n{}: {}",
+            "Soundeo search URL".green(),
+            sample_url.cyan()
+        );
+        println!("{}", "You can visit this link to see what tracks will be processed.".dimmed());
 
         // Fetch and queue tracks
         Self::fetch_and_queue_tracks(genre_id, &start_date, &end_date).await?;
@@ -377,13 +393,88 @@ impl GenreTrackerCommands {
         Ok(())
     }
 
+    async fn update_followed_genre_date() -> GenreTrackerResult<()> {
+        let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+
+        if tracker.tracked_genres.is_empty() {
+            println!("{}", "No genres are currently being tracked!".yellow());
+            return Ok(());
+        }
+
+        // Select genre to update
+        let mut genre_options: Vec<(u32, String)> = tracker
+            .tracked_genres
+            .iter()
+            .map(|(id, info)| {
+                (
+                    *id,
+                    format!(
+                        "{} (currently tracking from: {})",
+                        info.genre_name, info.last_checked_date
+                    ),
+                )
+            })
+            .collect();
+        genre_options.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let options: Vec<String> = genre_options.iter().map(|(_, name)| name.clone()).collect();
+
+        let selection = Dialoguer::select(
+            "Select a genre to update tracking date".to_string(),
+            options,
+            None,
+        )
+        .change_context(GenreTrackerError)?;
+
+        let genre_id = genre_options[selection].0;
+        let tracked_genre = tracker.tracked_genres.get(&genre_id).unwrap();
+        let genre_name = tracked_genre.genre_name.clone();
+        let current_date = tracked_genre.last_checked_date.clone();
+
+        println!("\nUpdating tracking date for {}", genre_name.cyan());
+        println!("Current tracking date: {}", current_date.yellow());
+        println!(
+            "{}",
+            "Choose a new date to track from. This will affect future track searches.".dimmed()
+        );
+
+        // Use the existing date selector
+        let new_date = Self::select_start_date(&genre_name)?;
+
+        if new_date == current_date {
+            println!("{}", "No change - date is the same.".yellow());
+            return Ok(());
+        }
+
+        // Update the date
+        if let Some(tracked_genre) = tracker.tracked_genres.get_mut(&genre_id) {
+            tracked_genre.last_checked_date = new_date.clone();
+        }
+
+        DjWizardLog::save_genre_tracker(tracker).change_context(GenreTrackerError)?;
+
+        println!(
+            "Successfully updated {} tracking date from {} to {}",
+            genre_name.green(),
+            current_date.yellow(),
+            new_date.cyan()
+        );
+
+        println!(
+            "{}",
+            "Next time you queue tracks from this genre, it will search from this new date forward.".dimmed()
+        );
+
+        Ok(())
+    }
+
     async fn fetch_and_queue_tracks(
         genre_id: u32,
         start_date: &str,
         end_date: &str,
     ) -> GenreTrackerResult<()> {
         let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
-        
+
         let mut soundeo_user = SoundeoUser::new().change_context(GenreTrackerError)?;
         soundeo_user
             .login_and_update_user_info()
@@ -394,15 +485,15 @@ impl GenreTrackerCommands {
         println!("Finding the last page...");
         let mut page = 1;
         let mut last_page = None;
-        
+
         loop {
             let url = tracker.build_soundeo_url(genre_id, start_date, end_date, page);
-            
+
             let client = Client::new();
             let session_cookie = soundeo_user
                 .get_session_cookie()
                 .change_context(GenreTrackerError)?;
-            
+
             let response = client
                 .get(&url)
                 .header("cookie", &session_cookie)
@@ -410,16 +501,16 @@ impl GenreTrackerCommands {
                 .await
                 .into_report()
                 .change_context(GenreTrackerError)?;
-            
+
             if response.status() == 404 {
                 last_page = Some(page - 1);
                 println!("Found last page: {}", page - 1);
                 break;
             }
-            
+
             page += 1;
         }
-        
+
         let last_page = match last_page {
             Some(p) if p > 0 => p,
             _ => {
@@ -430,111 +521,139 @@ impl GenreTrackerCommands {
 
         // Phase 2: Process pages from last to first
         println!("Processing {} pages from {} to 1...", last_page, last_page);
-        
+
         let mut total_added = 0;
         let mut total_skipped = 0;
         let mut empty_pages_count = 0;
-        let last_checked_date = tracker.tracked_genres.get(&genre_id)
+        let last_checked_date = tracker
+            .tracked_genres
+            .get(&genre_id)
             .map(|g| g.last_checked_date.clone())
             .unwrap_or_else(|| start_date.to_string());
-        
+
         // Process pages in reverse order (from last_page to 1)
         for current_page in (1..=last_page).rev() {
             println!("\nProcessing page {} of {}", current_page, last_page);
-            
+
             let url = tracker.build_soundeo_url(genre_id, start_date, end_date, current_page);
-            
+
             // Get tracks from this page
-            let mut track_list = SoundeoTracksList::new(url.clone()).change_context(GenreTrackerError)?;
+            let mut track_list =
+                SoundeoTracksList::new(url.clone()).change_context(GenreTrackerError)?;
             track_list
                 .get_tracks_id(&soundeo_user)
                 .await
                 .change_context(GenreTrackerError)?;
-            
+
             if track_list.track_ids.is_empty() {
                 println!("No tracks found on page {}", current_page);
                 continue;
             }
-            
-            println!("Found {} tracks on page {}", track_list.track_ids.len(), current_page);
-            
+
+            println!(
+                "Found {} tracks on page {}",
+                track_list.track_ids.len(),
+                current_page
+            );
+
             // Filter tracks by date and get track info
             let mut tracks_to_process = HashSet::new();
             let mut most_recent_date_in_page = None;
             let mut tracks_processed_count = 0;
-            
+
             for track_id in &track_list.track_ids {
                 let mut track_info = SoundeoTrack::new(track_id.clone());
                 track_info
                     .get_info(&soundeo_user, false) // Don't print for each track
                     .await
                     .change_context(GenreTrackerError)?;
-                
+
+                // Always update most recent date - check ALL tracks in page, not just processed ones
+                if most_recent_date_in_page.is_none()
+                    || track_info.date > *most_recent_date_in_page.as_ref().unwrap()
+                {
+                    most_recent_date_in_page = Some(track_info.date.clone());
+                }
+
                 // Check if track date is >= last_checked_date (include same day)
                 if track_info.date >= last_checked_date {
                     tracks_to_process.insert(track_id.clone());
                     tracks_processed_count += 1;
-                    
-                    // Update most recent date in this page
-                    if most_recent_date_in_page.is_none() || track_info.date > *most_recent_date_in_page.as_ref().unwrap() {
-                        most_recent_date_in_page = Some(track_info.date.clone());
-                    }
                 }
             }
-            
-            if tracks_to_process.is_empty() {
-                println!("No new tracks to process on page {} (all tracks are older than {})", current_page, last_checked_date);
+
+            // Process tracks if there are any to process
+            if !tracks_to_process.is_empty() {
+                empty_pages_count = 0; // Reset counter
+
+                // Process tracks using the common processor
+                let genre_name = tracker
+                    .available_genres
+                    .get(&genre_id)
+                    .map(|info| info.name.as_str())
+                    .unwrap_or("Unknown Genre");
+
+                let context_description = format!("from {} (page {})", genre_name, current_page);
+
+                let (added, skipped) = TrackProcessor::process_tracks_to_queue(
+                    &tracks_to_process,
+                    &soundeo_user,
+                    Priority::Normal,
+                    false, // repeat_download = false for genre tracking
+                    &context_description,
+                )
+                .await
+                .change_context(GenreTrackerError)?;
+
+                total_added += added;
+                total_skipped += skipped;
+            } else {
+                println!(
+                    "No new tracks to process on page {} (all tracks are older than {})",
+                    current_page, last_checked_date
+                );
                 empty_pages_count += 1;
-                
+
                 // Stop if we've had several empty pages
                 if empty_pages_count >= 3 {
-                    println!("Stopping early - found {} consecutive pages with no new tracks", empty_pages_count);
+                    println!(
+                        "Stopping early - found {} consecutive pages with no new tracks",
+                        empty_pages_count
+                    );
                     break;
                 }
-                continue;
             }
-            
-            empty_pages_count = 0; // Reset counter
-            
-            // Process tracks using the common processor
-            let genre_name = tracker.available_genres.get(&genre_id)
-                .map(|info| info.name.as_str())
-                .unwrap_or("Unknown Genre");
-            
-            let context_description = format!("from {} (page {})", genre_name, current_page);
-            
-            let (added, skipped) = TrackProcessor::process_tracks_to_queue(
-                &tracks_to_process,
-                &soundeo_user,
-                Priority::Normal,
-                false, // repeat_download = false for genre tracking
-                &context_description,
-            )
-            .await
-            .change_context(GenreTrackerError)?;
-            
-            total_added += added;
-            total_skipped += skipped;
-            
-            // Update progress after each page
+
+            // ALWAYS update progress with the most recent date found in this page
+            // This ensures we don't lose progress even if no tracks were processed
             if let Some(most_recent_date) = most_recent_date_in_page {
-                tracker.update_last_checked(genre_id).change_context(GenreTrackerError)?;
+                tracker
+                    .update_last_checked(genre_id)
+                    .change_context(GenreTrackerError)?;
                 if let Some(tracked_genre) = tracker.tracked_genres.get_mut(&genre_id) {
                     tracked_genre.last_checked_date = most_recent_date;
                 }
-                DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
-                println!("Progress saved - last checked date updated to: {}", 
-                    tracker.tracked_genres.get(&genre_id).unwrap().last_checked_date.cyan());
+                DjWizardLog::save_genre_tracker(tracker.clone())
+                    .change_context(GenreTrackerError)?;
+                println!(
+                    "Progress saved - last checked date updated to: {}",
+                    tracker
+                        .tracked_genres
+                        .get(&genre_id)
+                        .unwrap()
+                        .last_checked_date
+                        .cyan()
+                );
             }
         }
-        
+
         println!(
             "\n{}: Added {} tracks to queue, skipped {} tracks",
             "Summary".green(),
             total_added.to_string().cyan(),
             total_skipped.to_string().yellow()
         );
-        
+
         Ok(())
     }
 }
