@@ -23,6 +23,9 @@ pub enum GenreTrackerCommands {
     FollowNewGenre,
     ViewFollowedGenres,
     RemoveFollowedGenre,
+    AddFavoriteArtistToGenre,
+    ViewFavoriteArtists,
+    RemoveFavoriteArtist,
 }
 
 impl GenreTrackerCommands {
@@ -169,6 +172,9 @@ impl GenreTrackerCommands {
             }
             GenreTrackerCommands::ViewFollowedGenres => Self::view_followed_genres(),
             GenreTrackerCommands::RemoveFollowedGenre => Self::remove_followed_genre(),
+            GenreTrackerCommands::AddFavoriteArtistToGenre => Self::add_favorite_artist_to_genre(),
+            GenreTrackerCommands::ViewFavoriteArtists => Self::view_favorite_artists(),
+            GenreTrackerCommands::RemoveFavoriteArtist => Self::remove_favorite_artist(),
         }
     }
 
@@ -676,6 +682,272 @@ impl GenreTrackerCommands {
             total_added.to_string().cyan(),
             total_skipped.to_string().yellow()
         );
+
+        Ok(())
+    }
+
+    fn add_favorite_artist_to_genre() -> GenreTrackerResult<()> {
+        let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+
+        if tracker.tracked_genres.is_empty() {
+            println!("{}", "No genres are being tracked. Please follow a genre first.".red());
+            return Ok(());
+        }
+
+        // Select genre
+        let genre_options: Vec<String> = tracker
+            .tracked_genres
+            .values()
+            .map(|genre| format!("{} ({})", genre.genre_name, genre.genre_id))
+            .collect();
+
+        let genre_selection = Dialoguer::select(
+            "Select a genre to add favorite artists to:".to_string(),
+            genre_options.clone(),
+            None,
+        )
+        .change_context(GenreTrackerError)?;
+
+        let selected_genre_id = tracker
+            .tracked_genres
+            .values()
+            .nth(genre_selection)
+            .unwrap()
+            .genre_id;
+
+        let genre_name = tracker.tracked_genres.get(&selected_genre_id).unwrap().genre_name.clone();
+        
+        println!(
+            "\nAdding favorite artists to genre: {}",
+            genre_name.cyan()
+        );
+
+        let current_artists = tracker.tracked_genres.get(&selected_genre_id).unwrap().favorite_artists.clone();
+        if !current_artists.is_empty() {
+            println!("\nCurrent favorite artists:");
+            for (i, artist) in current_artists.iter().enumerate() {
+                println!("  {}. {}", i + 1, artist.green());
+            }
+            println!();
+        }
+
+        loop {
+            // Get artist name from user
+            let artist_name_input = Dialoguer::input(
+                "Enter artist name (or press Enter to finish):".to_string(),
+            )
+            .change_context(GenreTrackerError)?;
+
+            if artist_name_input.trim().is_empty() {
+                break;
+            }
+
+            // Capitalize first letter of each word
+            let formatted_artist_name = artist_name_input
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+
+            // Confirm with user
+            let confirmation = Dialoguer::confirm(
+                format!("Add '{}' as favorite artist?", formatted_artist_name.green()),
+                Some(true),
+            )
+            .change_context(GenreTrackerError)?;
+
+            if confirmation {
+                // Check if artist already exists
+                let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
+                if selected_genre.favorite_artists.contains(&formatted_artist_name) {
+                    println!(
+                        "Artist '{}' is already in the favorite list!",
+                        formatted_artist_name.yellow()
+                    );
+                } else {
+                    // Add artist and save immediately
+                    let selected_genre_mut = tracker.tracked_genres.get_mut(&selected_genre_id).unwrap();
+                    selected_genre_mut.favorite_artists.push(formatted_artist_name.clone());
+                    println!(
+                        "Artist '{}' added successfully!",
+                        formatted_artist_name.green()
+                    );
+                    
+                    // Save immediately after adding each artist
+                    DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
+                }
+            } else {
+                println!("Artist not added.");
+            }
+
+            // Ask if user wants to add another artist
+            let add_another = Dialoguer::confirm(
+                "Add another artist?".to_string(),
+                Some(true),
+            )
+            .change_context(GenreTrackerError)?;
+
+            if !add_another {
+                break;
+            }
+        }
+
+        let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
+        if !selected_genre.favorite_artists.is_empty() {
+            println!("\nFinal list of favorite artists for {}:", selected_genre.genre_name.cyan());
+            for (i, artist) in selected_genre.favorite_artists.iter().enumerate() {
+                println!("  {}. {}", i + 1, artist.green());
+            }
+        } else {
+            println!("No favorite artists added.");
+        }
+
+        Ok(())
+    }
+
+    fn view_favorite_artists() -> GenreTrackerResult<()> {
+        let tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+
+        if tracker.tracked_genres.is_empty() {
+            println!("{}", "No genres are being tracked.".red());
+            return Ok(());
+        }
+
+        println!("{}", "Favorite Artists by Genre".cyan().bold());
+        println!("{}", "========================".cyan());
+
+        for tracked_genre in tracker.tracked_genres.values() {
+            println!("\n{} (ID: {})", tracked_genre.genre_name.green().bold(), tracked_genre.genre_id);
+            
+            if tracked_genre.favorite_artists.is_empty() {
+                println!("  {}", "No favorite artists added yet".yellow());
+            } else {
+                for (i, artist) in tracked_genre.favorite_artists.iter().enumerate() {
+                    println!("  {}. {}", i + 1, artist.green());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn remove_favorite_artist() -> GenreTrackerResult<()> {
+        let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+
+        if tracker.tracked_genres.is_empty() {
+            println!("{}", "No genres are being tracked.".red());
+            return Ok(());
+        }
+
+        // Filter genres that have favorite artists
+        let genres_with_artists: Vec<_> = tracker
+            .tracked_genres
+            .values()
+            .filter(|genre| !genre.favorite_artists.is_empty())
+            .collect();
+
+        if genres_with_artists.is_empty() {
+            println!("{}", "No favorite artists found in any genre.".yellow());
+            return Ok(());
+        }
+
+        // Select genre
+        let genre_options: Vec<String> = genres_with_artists
+            .iter()
+            .map(|genre| format!("{} ({} artists)", genre.genre_name, genre.favorite_artists.len()))
+            .collect();
+
+        let genre_selection = Dialoguer::select(
+            "Select a genre to remove artists from:".to_string(),
+            genre_options,
+            None,
+        )
+        .change_context(GenreTrackerError)?;
+
+        let selected_genre_id = genres_with_artists[genre_selection].genre_id;
+        
+        let genre_name = tracker.tracked_genres.get(&selected_genre_id).unwrap().genre_name.clone();
+        println!(
+            "\nRemoving favorite artists from genre: {}",
+            genre_name.cyan()
+        );
+
+        loop {
+            let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
+            if selected_genre.favorite_artists.is_empty() {
+                println!("{}", "No more favorite artists to remove.".yellow());
+                break;
+            }
+
+            // Show current artists
+            println!("\nCurrent favorite artists:");
+            for (i, artist) in selected_genre.favorite_artists.iter().enumerate() {
+                println!("  {}. {}", i + 1, artist.green());
+            }
+
+            // Select artist to remove
+            let mut artist_options = selected_genre.favorite_artists.clone();
+            artist_options.push("Cancel".to_string());
+
+            let artist_selection = Dialoguer::select(
+                "Select an artist to remove:".to_string(),
+                artist_options.clone(),
+                None,
+            )
+            .change_context(GenreTrackerError)?;
+
+            // If user selected "Cancel"
+            if artist_selection == artist_options.len() - 1 {
+                break;
+            }
+
+            let artist_to_remove = selected_genre.favorite_artists[artist_selection].clone();
+
+            // Confirm removal
+            let confirmation = Dialoguer::confirm(
+                format!("Remove '{}' from favorite artists?", artist_to_remove.red()),
+                Some(false),
+            )
+            .change_context(GenreTrackerError)?;
+
+            if confirmation {
+                let selected_genre_mut = tracker.tracked_genres.get_mut(&selected_genre_id).unwrap();
+                let removed_artist = selected_genre_mut.favorite_artists.remove(artist_selection);
+                println!("Artist '{}' removed successfully!", removed_artist.red());
+
+                // Save changes immediately
+                DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
+            } else {
+                println!("Artist not removed.");
+            }
+
+            // Ask if user wants to remove another artist
+            let remove_another = Dialoguer::confirm(
+                "Remove another artist?".to_string(),
+                Some(true),
+            )
+            .change_context(GenreTrackerError)?;
+
+            if !remove_another {
+                break;
+            }
+        }
+
+        let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
+        if !selected_genre.favorite_artists.is_empty() {
+            println!("\nRemaining favorite artists for {}:", selected_genre.genre_name.cyan());
+            for (i, artist) in selected_genre.favorite_artists.iter().enumerate() {
+                println!("  {}. {}", i + 1, artist.green());
+            }
+        } else {
+            println!("No favorite artists remaining for {}.", selected_genre.genre_name.cyan());
+        }
 
         Ok(())
     }
