@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::log::DjWizardLogResult;
 
 pub mod commands;
-pub mod scraper;
 
 #[derive(Debug)]
 pub struct GenreTrackerError;
@@ -53,21 +52,15 @@ impl GenreTracker {
     pub fn new() -> Self {
         let mut available_genres = HashMap::new();
         
-        // Populate with known Soundeo genres
+        // Only Drum and Bass is enabled for now
+        // More genres will be added manually after confirming their IDs
         available_genres.insert(1, GenreInfo { id: 1, name: "Drum and Bass".to_string() });
-        available_genres.insert(2, GenreInfo { id: 2, name: "Dubstep".to_string() });
-        available_genres.insert(3, GenreInfo { id: 3, name: "Techno".to_string() });
-        available_genres.insert(4, GenreInfo { id: 4, name: "House".to_string() });
-        available_genres.insert(5, GenreInfo { id: 5, name: "Trance".to_string() });
-        available_genres.insert(6, GenreInfo { id: 6, name: "Hardcore".to_string() });
-        available_genres.insert(7, GenreInfo { id: 7, name: "Breakbeat".to_string() });
-        available_genres.insert(8, GenreInfo { id: 8, name: "Electro".to_string() });
-        available_genres.insert(9, GenreInfo { id: 9, name: "Minimal".to_string() });
-        available_genres.insert(10, GenreInfo { id: 10, name: "Progressive".to_string() });
-        available_genres.insert(11, GenreInfo { id: 11, name: "Psy-Trance".to_string() });
-        available_genres.insert(12, GenreInfo { id: 12, name: "Hip-Hop".to_string() });
-        available_genres.insert(13, GenreInfo { id: 13, name: "Reggae / Dub".to_string() });
-        available_genres.insert(14, GenreInfo { id: 14, name: "Other".to_string() });
+        
+        // TODO: Add more genres after confirming their IDs on Soundeo
+        // available_genres.insert(2, GenreInfo { id: 2, name: "Dubstep".to_string() });
+        // available_genres.insert(3, GenreInfo { id: 3, name: "Techno".to_string() });
+        // available_genres.insert(4, GenreInfo { id: 4, name: "House".to_string() });
+        // etc...
 
         Self {
             tracked_genres: HashMap::new(),
