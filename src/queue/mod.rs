@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod track_processor;
 
 use ::serde::{Deserialize, Serialize};
 use std::fmt;
