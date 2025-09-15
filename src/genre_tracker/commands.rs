@@ -11,6 +11,7 @@ use crate::dialoguer::Dialoguer;
 use crate::genre_tracker::{GenreTrackerCRUD, GenreTrackerError, GenreTrackerResult};
 use crate::log::{DjWizardLog, Priority};
 use crate::queue::track_processor::TrackProcessor;
+use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
 use crate::user::SoundeoUser;
 
@@ -381,30 +382,27 @@ impl GenreTrackerCommands {
         start_date: &str,
         end_date: &str,
     ) -> GenreTrackerResult<()> {
-        let tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
-
+        let mut tracker = DjWizardLog::get_genre_tracker().change_context(GenreTrackerError)?;
+        
         let mut soundeo_user = SoundeoUser::new().change_context(GenreTrackerError)?;
         soundeo_user
             .login_and_update_user_info()
             .await
             .change_context(GenreTrackerError)?;
 
+        // Phase 1: Find the last page
+        println!("Finding the last page...");
         let mut page = 1;
-        let mut total_added = 0;
-        let mut total_skipped = 0;
-
-        println!("Fetching tracks from Soundeo...");
-
+        let mut last_page = None;
+        
         loop {
             let url = tracker.build_soundeo_url(genre_id, start_date, end_date, page);
-            println!("Fetching page {}...", page);
-
-            // Check if page exists (returns 404 when no more pages)
+            
             let client = Client::new();
             let session_cookie = soundeo_user
                 .get_session_cookie()
                 .change_context(GenreTrackerError)?;
-
+            
             let response = client
                 .get(&url)
                 .header("cookie", &session_cookie)
@@ -412,42 +410,101 @@ impl GenreTrackerCommands {
                 .await
                 .into_report()
                 .change_context(GenreTrackerError)?;
-
+            
             if response.status() == 404 {
-                println!("Reached end of pages at page {}", page);
+                last_page = Some(page - 1);
+                println!("Found last page: {}", page - 1);
                 break;
             }
+            
+            page += 1;
+        }
+        
+        let last_page = match last_page {
+            Some(p) if p > 0 => p,
+            _ => {
+                println!("No pages found for this date range");
+                return Ok(());
+            }
+        };
 
+        // Phase 2: Process pages from last to first
+        println!("Processing {} pages from {} to 1...", last_page, last_page);
+        
+        let mut total_added = 0;
+        let mut total_skipped = 0;
+        let mut empty_pages_count = 0;
+        let last_checked_date = tracker.tracked_genres.get(&genre_id)
+            .map(|g| g.last_checked_date.clone())
+            .unwrap_or_else(|| start_date.to_string());
+        
+        // Process pages in reverse order (from last_page to 1)
+        for current_page in (1..=last_page).rev() {
+            println!("\nProcessing page {} of {}", current_page, last_page);
+            
+            let url = tracker.build_soundeo_url(genre_id, start_date, end_date, current_page);
+            
             // Get tracks from this page
-            let mut track_list =
-                SoundeoTracksList::new(url.clone()).change_context(GenreTrackerError)?;
+            let mut track_list = SoundeoTracksList::new(url.clone()).change_context(GenreTrackerError)?;
             track_list
                 .get_tracks_id(&soundeo_user)
                 .await
                 .change_context(GenreTrackerError)?;
-
+            
             if track_list.track_ids.is_empty() {
-                println!("No tracks found on page {}", page);
-                break;
+                println!("No tracks found on page {}", current_page);
+                continue;
             }
-
-            println!(
-                "Found {} tracks on page {}",
-                track_list.track_ids.len(),
-                page
-            );
-
-            // Use the common track processor with detailed progress
-            let genre_name = tracker
-                .available_genres
-                .get(&genre_id)
+            
+            println!("Found {} tracks on page {}", track_list.track_ids.len(), current_page);
+            
+            // Filter tracks by date and get track info
+            let mut tracks_to_process = HashSet::new();
+            let mut most_recent_date_in_page = None;
+            let mut tracks_processed_count = 0;
+            
+            for track_id in &track_list.track_ids {
+                let mut track_info = SoundeoTrack::new(track_id.clone());
+                track_info
+                    .get_info(&soundeo_user, false) // Don't print for each track
+                    .await
+                    .change_context(GenreTrackerError)?;
+                
+                // Check if track date is >= last_checked_date (include same day)
+                if track_info.date >= last_checked_date {
+                    tracks_to_process.insert(track_id.clone());
+                    tracks_processed_count += 1;
+                    
+                    // Update most recent date in this page
+                    if most_recent_date_in_page.is_none() || track_info.date > *most_recent_date_in_page.as_ref().unwrap() {
+                        most_recent_date_in_page = Some(track_info.date.clone());
+                    }
+                }
+            }
+            
+            if tracks_to_process.is_empty() {
+                println!("No new tracks to process on page {} (all tracks are older than {})", current_page, last_checked_date);
+                empty_pages_count += 1;
+                
+                // Stop if we've had several empty pages
+                if empty_pages_count >= 3 {
+                    println!("Stopping early - found {} consecutive pages with no new tracks", empty_pages_count);
+                    break;
+                }
+                continue;
+            }
+            
+            empty_pages_count = 0; // Reset counter
+            
+            // Process tracks using the common processor
+            let genre_name = tracker.available_genres.get(&genre_id)
                 .map(|info| info.name.as_str())
                 .unwrap_or("Unknown Genre");
-
-            let context_description = format!("from {} (page {})", genre_name, page);
-
+            
+            let context_description = format!("from {} (page {})", genre_name, current_page);
+            
             let (added, skipped) = TrackProcessor::process_tracks_to_queue(
-                &track_list.track_ids,
+                &tracks_to_process,
                 &soundeo_user,
                 Priority::Normal,
                 false, // repeat_download = false for genre tracking
@@ -455,20 +512,29 @@ impl GenreTrackerCommands {
             )
             .await
             .change_context(GenreTrackerError)?;
-
+            
             total_added += added;
             total_skipped += skipped;
-
-            page += 1;
+            
+            // Update progress after each page
+            if let Some(most_recent_date) = most_recent_date_in_page {
+                tracker.update_last_checked(genre_id).change_context(GenreTrackerError)?;
+                if let Some(tracked_genre) = tracker.tracked_genres.get_mut(&genre_id) {
+                    tracked_genre.last_checked_date = most_recent_date;
+                }
+                DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
+                println!("Progress saved - last checked date updated to: {}", 
+                    tracker.tracked_genres.get(&genre_id).unwrap().last_checked_date.cyan());
+            }
         }
-
+        
         println!(
             "\n{}: Added {} tracks to queue, skipped {} tracks",
             "Summary".green(),
             total_added.to_string().cyan(),
             total_skipped.to_string().yellow()
         );
-
+        
         Ok(())
     }
 }
