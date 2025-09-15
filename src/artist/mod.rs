@@ -59,9 +59,13 @@ impl ArtistManager {
                         existing_artist.genres.push(genre_name.to_string());
                         existing_artist.last_updated = now;
                         return Ok(true); // Updated
+                    } else {
+                        return Ok(false); // Genre already exists
                     }
+                } else {
+                    // No genre provided, and artist already exists - no change but not an error
+                    return Ok(false); // No change
                 }
-                Ok(false) // No change
             }
             None => {
                 // New artist

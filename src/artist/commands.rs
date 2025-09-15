@@ -85,39 +85,11 @@ impl ArtistCommands {
                 }
             }
 
-            // Ask for optional genre association
-            let genre_input = Dialoguer::input(
-                "Enter genre to associate with these artists (optional, press Enter to skip):"
-                    .to_string(),
-            )
-            .change_context(ArtistError)?;
-
-            let genre = if genre_input.trim().is_empty() {
-                None
-            } else {
-                Some(ArtistManager::format_artist_name(&genre_input))
-            };
-
             // Confirm with user
-            let confirmation_msg = if let Some(ref g) = genre {
-                if artist_names.len() == 1 {
-                    format!(
-                        "Add '{}' as favorite artist in genre '{}'?",
-                        artist_names[0].green(),
-                        g.cyan()
-                    )
-                } else {
-                    format!(
-                        "Add all these artists as favorites in genre '{}'?",
-                        g.cyan()
-                    )
-                }
+            let confirmation_msg = if artist_names.len() == 1 {
+                format!("Add '{}' as favorite artist?", artist_names[0].green())
             } else {
-                if artist_names.len() == 1 {
-                    format!("Add '{}' as favorite artist?", artist_names[0].green())
-                } else {
-                    "Add all these artists as favorites?".to_string()
-                }
+                "Add all these artists as favorites?".to_string()
             };
 
             let confirmation =
@@ -129,7 +101,7 @@ impl ArtistCommands {
                 let mut skipped_count = 0;
 
                 for artist_name in artist_names {
-                    match manager.add_artist(&artist_name, genre.as_deref()) {
+                    match manager.add_artist(&artist_name, None) {
                         Ok(true) => {
                             if manager.get_artist(&artist_name).unwrap().created_at
                                 == manager.get_artist(&artist_name).unwrap().last_updated
@@ -150,7 +122,7 @@ impl ArtistCommands {
                         }
                         Ok(false) => {
                             println!(
-                                "Artist '{}' already exists with this genre!",
+                                "Artist '{}' already exists!",
                                 artist_name.yellow()
                             );
                             skipped_count += 1;
