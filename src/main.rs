@@ -85,6 +85,15 @@ enum DjWizardCommands {
     Genre,
     /// Manage favorite artists
     Artist,
+    /// Migrate soundeo_log.json to Firebase
+    Migrate {
+        /// Path to soundeo_log.json file
+        #[clap(long)]
+        soundeo_log: Option<String>,
+        /// Only migrate light fields (exclude soundeo and queued_tracks)
+        #[clap(long)]
+        light_only: bool,
+    },
 }
 
 impl DjWizardCommands {
@@ -236,6 +245,106 @@ impl DjWizardCommands {
                 ArtistCommands::execute()
                     .change_context(DjWizardError)
             }
+            DjWizardCommands::Migrate { soundeo_log, light_only } => {
+                use crate::auth::google_auth::GoogleAuth;
+                use crate::auth::firebase_client::FirebaseClient;
+                
+                // Try to load existing token
+                let auth_token = match GoogleAuth::load_token() {
+                    Ok(token) => token,
+                    Err(_) => {
+                        println!("❌ No valid authentication found. Please run 'dj-wizard auth' first.");
+                        return Err(DjWizardError).into_report();
+                    }
+                };
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await
+                    .change_context(DjWizardError)?;
+                
+                // Set default path if not provided
+                let default_log_path = "/Users/matiasbn/soundeo-bot-files/soundeo_log.json";
+                let log_path = soundeo_log.as_deref().unwrap_or(default_log_path);
+                
+                println!("🔄 Migrating complete soundeo_log.json to Firebase...");
+                println!("📂 Reading from: {}", log_path);
+                
+                // Check file size first
+                let metadata = std::fs::metadata(log_path)
+                    .map_err(|e| {
+                        println!("❌ Failed to read file metadata: {}", e);
+                        DjWizardError
+                    })?;
+                
+                let file_size_mb = metadata.len() as f64 / 1024.0 / 1024.0;
+                println!("📊 File size: {:.2} MB", file_size_mb);
+                
+                if file_size_mb > 1.0 {
+                    println!("⚠️  Warning: File is larger than 1MB. Firebase might reject it.");
+                    println!("💡 Consider using a smaller test file first.");
+                }
+                
+                // Read the entire JSON file
+                println!("📖 Reading file contents...");
+                let log_data = std::fs::read_to_string(log_path)
+                    .map_err(|e| {
+                        println!("❌ Failed to read log file: {}", e);
+                        DjWizardError
+                    })?;
+                
+                println!("✅ File read successfully ({} bytes)", log_data.len());
+                
+                // Parse as JSON to validate it's correct
+                println!("🔍 Parsing JSON...");
+                let json_value: serde_json::Value = serde_json::from_str(&log_data)
+                    .map_err(|e| {
+                        println!("❌ Invalid JSON file: {}", e);
+                        DjWizardError
+                    })?;
+                
+                println!("✅ JSON parsed successfully");
+                
+                let final_data = if *light_only {
+                    println!("🪶 Light mode: Filtering out heavy fields...");
+                    
+                    // Extract only light fields, exclude heavy ones
+                    if let serde_json::Value::Object(mut map) = json_value {
+                        // Remove heavy fields
+                        let removed_soundeo = map.remove("soundeo");
+                        let removed_queued = map.remove("queued_tracks");
+                        
+                        if removed_soundeo.is_some() {
+                            println!("🗑️  Excluded 'soundeo' field");
+                        }
+                        if removed_queued.is_some() {
+                            println!("🗑️  Excluded 'queued_tracks' field");
+                        }
+                        
+                        println!("✅ Remaining fields: {:?}", map.keys().collect::<Vec<_>>());
+                        serde_json::Value::Object(map)
+                    } else {
+                        println!("⚠️  JSON is not an object, uploading as-is");
+                        json_value
+                    }
+                } else {
+                    println!("📦 Full mode: Uploading complete file...");
+                    json_value
+                };
+                
+                // Show final size
+                let final_size = serde_json::to_string(&final_data).unwrap().len();
+                let final_size_mb = final_size as f64 / 1024.0 / 1024.0;
+                println!("📊 Final upload size: {:.2} MB ({} bytes)", final_size_mb, final_size);
+                
+                // Upload the data
+                println!("☁️  Uploading to Firebase...");
+                firebase_client.set_document("dj_wizard_data", "soundeo_log", &final_data).await
+                    .change_context(DjWizardError)?;
+                
+                println!("✅ Successfully migrated entire soundeo_log.json to Firebase!");
+                println!("🎉 Your data is now available in the cloud!");
+                Ok(())
+            }
         };
     }
 
@@ -276,6 +385,16 @@ impl DjWizardCommands {
             }
             DjWizardCommands::Artist => {
                 format!("dj-wizard artist")
+            }
+            DjWizardCommands::Migrate { soundeo_log, light_only } => {
+                let mut cmd = "dj-wizard migrate".to_string();
+                if let Some(log_path) = soundeo_log {
+                    cmd.push_str(&format!(" --soundeo-log {}", log_path));
+                }
+                if *light_only {
+                    cmd.push_str(" --light-only");
+                }
+                cmd
             }
         }
     }

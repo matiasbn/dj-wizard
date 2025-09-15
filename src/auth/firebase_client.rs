@@ -55,9 +55,7 @@ impl FirebaseClient {
             .client
             .patch(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
-            .json(&serde_json::json!({
-                "fields": self.convert_to_firestore_value(data)
-            }))
+            .json(&self.convert_to_firestore_document(data))
             .send()
             .await
             .map_err(|e| AuthError::new(&format!("Failed to set document: {}", e)))?;
@@ -106,6 +104,26 @@ impl FirebaseClient {
             .map_err(|e| AuthError::new(&format!("Failed to parse response: {}", e)))?;
 
         Ok(Some(self.convert_from_firestore_value(&doc)))
+    }
+
+    /// Convert JSON object to Firestore document format
+    fn convert_to_firestore_document(&self, data: &Value) -> Value {
+        if let Value::Object(obj) = data {
+            let fields: serde_json::Map<String, Value> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), self.convert_to_firestore_value(v)))
+                .collect();
+            serde_json::json!({
+                "fields": fields
+            })
+        } else {
+            // If it's not an object, wrap it as a single field
+            serde_json::json!({
+                "fields": {
+                    "data": self.convert_to_firestore_value(data)
+                }
+            })
+        }
     }
 
     /// Convert JSON value to Firestore format
