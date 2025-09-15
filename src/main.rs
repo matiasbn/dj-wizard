@@ -79,7 +79,7 @@ enum DjWizardCommands {
     /// Backup the log file to the cloud
     Backup,
     /// Track available tracks by genre
-    GenreTracker,
+    Genre,
     /// Manage favorite artists
     Artist,
 }
@@ -208,7 +208,7 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
-            DjWizardCommands::GenreTracker => {
+            DjWizardCommands::Genre => {
                 GenreTrackerCommands::execute()
                     .change_context(DjWizardError)
                     .await
@@ -249,8 +249,8 @@ impl DjWizardCommands {
             DjWizardCommands::Backup => {
                 format!("dj-wizard backup")
             }
-            DjWizardCommands::GenreTracker => {
-                format!("dj-wizard genre-tracker")
+            DjWizardCommands::Genre => {
+                format!("dj-wizard genre")
             }
             DjWizardCommands::Artist => {
                 format!("dj-wizard artist")

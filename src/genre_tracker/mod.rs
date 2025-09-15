@@ -34,8 +34,6 @@ pub struct TrackedGenre {
     pub genre_name: String,
     pub last_checked_date: String,
     pub created_at: String,
-    #[serde(default)]
-    pub favorite_artists: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -78,7 +76,6 @@ impl GenreTracker {
                 genre_name: genre_info.name.clone(),
                 last_checked_date: now.clone(),
                 created_at: now,
-                favorite_artists: Vec::new(),
             };
             self.tracked_genres.insert(genre_id, tracked_genre);
             Ok(())
