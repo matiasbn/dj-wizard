@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use chrono::{Duration, Utc};
 use colored::Colorize;
 use error_stack::{IntoReport, ResultExt};
+use indicatif::{ProgressBar, ProgressStyle};
 use inflector::Inflector;
 use reqwest::Client;
 use strum::IntoEnumIterator;
@@ -561,12 +562,33 @@ impl GenreTrackerCommands {
             let mut most_recent_date_in_page = None;
             let mut tracks_processed_count = 0;
 
-            for track_id in &track_list.track_ids {
+            // Create progress bar for getting track info
+            let total_tracks = track_list.track_ids.len();
+            let pb = ProgressBar::new(total_tracks as u64);
+            pb.set_style(ProgressStyle::default_bar()
+                .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.white/blue}] {pos}/{len} ({eta})").unwrap()
+                .progress_chars("█  "));
+            pb.set_message(format!(
+                "Getting track info for page {} ({} tracks)",
+                current_page.to_string().cyan(),
+                total_tracks.to_string().cyan()
+            ));
+
+            for (index, track_id) in track_list.track_ids.iter().enumerate() {
                 let mut track_info = SoundeoTrack::new(track_id.clone());
                 track_info
                     .get_info(&soundeo_user, false) // Don't print for each track
                     .await
                     .change_context(GenreTrackerError)?;
+
+                // Update progress bar with current track title
+                pb.set_message(format!(
+                    "Getting track info for page {} ({}/{}) - {}",
+                    current_page.to_string().cyan(),
+                    (index + 1).to_string().cyan(),
+                    total_tracks.to_string().cyan(),
+                    track_info.title.clone().green()
+                ));
 
                 // Always update most recent date - check ALL tracks in page, not just processed ones
                 if most_recent_date_in_page.is_none()
@@ -580,7 +602,16 @@ impl GenreTrackerCommands {
                     tracks_to_process.insert(track_id.clone());
                     tracks_processed_count += 1;
                 }
+                
+                pb.set_position((index + 1) as u64);
             }
+            
+            pb.finish_with_message(format!(
+                "Page {} processed: {} tracks found, {} tracks to queue",
+                current_page.to_string().green(),
+                total_tracks.to_string().cyan(),
+                tracks_to_process.len().to_string().green()
+            ));
 
             // Process tracks if there are any to process
             if !tracks_to_process.is_empty() {
@@ -627,22 +658,14 @@ impl GenreTrackerCommands {
             // ALWAYS update progress with the most recent date found in this page
             // This ensures we don't lose progress even if no tracks were processed
             if let Some(most_recent_date) = most_recent_date_in_page {
-                tracker
-                    .update_last_checked(genre_id)
-                    .change_context(GenreTrackerError)?;
                 if let Some(tracked_genre) = tracker.tracked_genres.get_mut(&genre_id) {
-                    tracked_genre.last_checked_date = most_recent_date;
+                    tracked_genre.last_checked_date = most_recent_date.clone();
                 }
                 DjWizardLog::save_genre_tracker(tracker.clone())
                     .change_context(GenreTrackerError)?;
                 println!(
                     "Progress saved - last checked date updated to: {}",
-                    tracker
-                        .tracked_genres
-                        .get(&genre_id)
-                        .unwrap()
-                        .last_checked_date
-                        .cyan()
+                    most_recent_date.cyan()
                 );
             }
         }

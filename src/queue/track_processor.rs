@@ -48,9 +48,17 @@ impl TrackProcessor {
 
             // Skip if already queued (quick check before getting track info)
             if queued_ids.contains(track_id) {
+                // Get track info to show title and URL
+                let mut track_info = SoundeoTrack::new(track_id.clone());
+                track_info
+                    .get_info(soundeo_user, false)
+                    .await
+                    .change_context(QueueError)?;
                 println!(
-                    "Track with id {} was previously queued, skipping",
+                    "Track with id {} was previously queued, skipping: {}, {}",
                     track_id.clone().yellow(),
+                    track_info.title.yellow(),
+                    track_info.get_track_url().yellow()
                 );
                 total_skipped += 1;
                 continue;
@@ -92,14 +100,16 @@ impl TrackProcessor {
             
             if queue_result {
                 println!(
-                    "Track {} successfully queued",
+                    "Track {} successfully queued: {}",
                     track_info.title.green(),
+                    track_info.get_track_url().green()
                 );
                 total_added += 1;
             } else {
                 println!(
-                    "Track {} was previously queued, skipping",
+                    "Track {} was previously queued, skipping: {}",
                     track_info.title.yellow(),
+                    track_info.get_track_url().yellow()
                 );
                 total_skipped += 1;
             }
