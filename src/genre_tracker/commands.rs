@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::Write;
 
 use chrono::{Duration, Utc};
 use colored::Colorize;
@@ -495,6 +496,10 @@ impl GenreTrackerCommands {
 
         loop {
             let url = tracker.build_soundeo_url(genre_id, start_date, end_date, page);
+            
+            // Show progress
+            print!("\rChecking page {}...", page.to_string().cyan());
+            std::io::stdout().flush().unwrap();
 
             let client = Client::new();
             let session_cookie = soundeo_user
@@ -511,7 +516,7 @@ impl GenreTrackerCommands {
 
             if response.status() == 404 {
                 last_page = Some(page - 1);
-                println!("Found last page: {}", page - 1);
+                println!("\rFound last page: {} (checked {} pages)", (page - 1).to_string().green(), page.to_string().cyan());
                 break;
             }
 
@@ -732,9 +737,9 @@ impl GenreTrackerCommands {
         }
 
         loop {
-            // Get artist name from user
+            // Get artist name(s) from user
             let artist_name_input = Dialoguer::input(
-                "Enter artist name (or press Enter to finish):".to_string(),
+                "Enter artist name(s) (separate multiple artists with commas, or press Enter to finish):".to_string(),
             )
             .change_context(GenreTrackerError)?;
 
@@ -742,53 +747,100 @@ impl GenreTrackerCommands {
                 break;
             }
 
-            // Capitalize first letter of each word
-            let formatted_artist_name = artist_name_input
-                .split_whitespace()
-                .map(|word| {
-                    let mut chars = word.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
-                    }
+            // Split by comma and process each artist
+            let artist_names: Vec<String> = artist_name_input
+                .split(',')
+                .map(|artist| artist.trim())
+                .filter(|artist| !artist.is_empty())
+                .map(|artist| {
+                    // Capitalize first letter of each word
+                    artist
+                        .split_whitespace()
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            match chars.next() {
+                                None => String::new(),
+                                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                            }
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
                 })
-                .collect::<Vec<String>>()
-                .join(" ");
+                .collect();
 
-            // Confirm with user
-            let confirmation = Dialoguer::confirm(
-                format!("Add '{}' as favorite artist?", formatted_artist_name.green()),
-                Some(true),
-            )
-            .change_context(GenreTrackerError)?;
-
-            if confirmation {
-                // Check if artist already exists
-                let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
-                if selected_genre.favorite_artists.contains(&formatted_artist_name) {
-                    println!(
-                        "Artist '{}' is already in the favorite list!",
-                        formatted_artist_name.yellow()
-                    );
-                } else {
-                    // Add artist and save immediately
-                    let selected_genre_mut = tracker.tracked_genres.get_mut(&selected_genre_id).unwrap();
-                    selected_genre_mut.favorite_artists.push(formatted_artist_name.clone());
-                    println!(
-                        "Artist '{}' added successfully!",
-                        formatted_artist_name.green()
-                    );
-                    
-                    // Save immediately after adding each artist
-                    DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
-                }
-            } else {
-                println!("Artist not added.");
+            if artist_names.is_empty() {
+                println!("No valid artist names entered.");
+                continue;
             }
 
-            // Ask if user wants to add another artist
+            // Show formatted artists to user
+            if artist_names.len() == 1 {
+                println!("Found 1 artist: {}", artist_names[0].green());
+            } else {
+                println!("Found {} artists:", artist_names.len().to_string().cyan());
+                for (i, artist) in artist_names.iter().enumerate() {
+                    println!("  {}. {}", i + 1, artist.green());
+                }
+            }
+
+            // Confirm with user
+            let confirmation = if artist_names.len() == 1 {
+                Dialoguer::confirm(
+                    format!("Add '{}' as favorite artist?", artist_names[0].green()),
+                    Some(true),
+                )
+                .change_context(GenreTrackerError)?
+            } else {
+                Dialoguer::confirm(
+                    "Add all these artists as favorites?".to_string(),
+                    Some(true),
+                )
+                .change_context(GenreTrackerError)?
+            };
+
+            if confirmation {
+                let mut added_count = 0;
+                let mut skipped_count = 0;
+                
+                for formatted_artist_name in artist_names {
+                    // Check if artist already exists
+                    let selected_genre = tracker.tracked_genres.get(&selected_genre_id).unwrap();
+                    if selected_genre.favorite_artists.contains(&formatted_artist_name) {
+                        println!(
+                            "Artist '{}' is already in the favorite list!",
+                            formatted_artist_name.yellow()
+                        );
+                        skipped_count += 1;
+                    } else {
+                        // Add artist and save immediately
+                        let selected_genre_mut = tracker.tracked_genres.get_mut(&selected_genre_id).unwrap();
+                        selected_genre_mut.favorite_artists.push(formatted_artist_name.clone());
+                        println!(
+                            "Artist '{}' added successfully!",
+                            formatted_artist_name.green()
+                        );
+                        added_count += 1;
+                        
+                        // Save immediately after adding each artist
+                        DjWizardLog::save_genre_tracker(tracker.clone()).change_context(GenreTrackerError)?;
+                    }
+                }
+                
+                // Summary
+                if added_count > 0 || skipped_count > 0 {
+                    println!(
+                        "Summary: {} artists added, {} artists skipped",
+                        added_count.to_string().green(),
+                        skipped_count.to_string().yellow()
+                    );
+                }
+            } else {
+                println!("Artists not added.");
+            }
+
+            // Ask if user wants to add more artists
             let add_another = Dialoguer::confirm(
-                "Add another artist?".to_string(),
+                "Add more artists?".to_string(),
                 Some(true),
             )
             .change_context(GenreTrackerError)?;
