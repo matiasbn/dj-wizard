@@ -513,9 +513,9 @@ impl QueueCommands {
 
     async fn manage_queue() -> QueueResult<()> {
         let options = vec![
+            "Prioritize by Artist",
             "Prioritize by Spotify Playlist",
             "Prioritize by Genre",
-            "Prioritize by Artist",
         ];
         let selection = Dialoguer::select(
             "How do you want to manage the queue?".to_string(),

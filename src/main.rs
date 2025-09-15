@@ -9,6 +9,7 @@ use native_dialog::FileDialog;
 use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
+use crate::genre_tracker::commands::GenreTrackerCommands;
 use crate::log::DjWizardLog;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
@@ -21,6 +22,7 @@ mod cleaner;
 mod config;
 mod dialoguer;
 mod errors;
+mod genre_tracker;
 mod ipfs;
 mod log;
 mod queue;
@@ -74,6 +76,8 @@ enum DjWizardCommands {
     Spotify(SpotifyCli),
     /// Backup the log file to the cloud
     Backup,
+    /// Track available tracks by genre
+    GenreTracker,
 }
 
 impl DjWizardCommands {
@@ -200,6 +204,11 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
+            DjWizardCommands::GenreTracker => {
+                GenreTrackerCommands::execute()
+                    .change_context(DjWizardError)
+                    .await
+            }
         };
     }
 
@@ -231,6 +240,9 @@ impl DjWizardCommands {
             }
             DjWizardCommands::Backup => {
                 format!("dj-wizard backup")
+            }
+            DjWizardCommands::GenreTracker => {
+                format!("dj-wizard genre-tracker")
             }
         }
     }
