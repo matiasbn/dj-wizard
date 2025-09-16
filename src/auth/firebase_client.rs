@@ -12,6 +12,7 @@ pub struct FirebaseClient {
     project_id: String,
     user_id: String,
     access_token: String,
+    refresh_token: Option<String>,
     token_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -22,6 +23,7 @@ impl FirebaseClient {
             project_id: AppConfig::FIREBASE_PROJECT_ID.to_string(),
             user_id: auth_token.user_id,
             access_token: auth_token.access_token,
+            refresh_token: auth_token.refresh_token,
             token_expires_at: auth_token.expires_at,
         })
     }
@@ -43,15 +45,33 @@ impl FirebaseClient {
         if chrono::Utc::now() > expires_soon {
             println!("🔄 Token expiring soon, refreshing authentication...");
             
-            let new_token = GoogleAuth::new()
-                .login()
-                .await
-                .map_err(|_| AuthError::new("Failed to refresh token"))?;
+            let new_token = if let Some(ref refresh_token) = self.refresh_token {
+                // Try automatic refresh first
+                match GoogleAuth::refresh_token(refresh_token).await {
+                    Ok(token) => {
+                        println!("✅ Token refreshed automatically");
+                        token
+                    }
+                    Err(e) => {
+                        println!("⚠️ Automatic refresh failed: {}, falling back to browser login", e);
+                        GoogleAuth::new()
+                            .login()
+                            .await
+                            .map_err(|_| AuthError::new("Failed to login"))?
+                    }
+                }
+            } else {
+                // No refresh token, do full login
+                println!("🌐 No refresh token available, opening browser for login...");
+                GoogleAuth::new()
+                    .login()
+                    .await
+                    .map_err(|_| AuthError::new("Failed to login"))?
+            };
             
             self.access_token = new_token.access_token;
+            self.refresh_token = new_token.refresh_token;
             self.token_expires_at = new_token.expires_at;
-            
-            println!("✅ Token refreshed successfully");
         }
         
         Ok(())
@@ -588,8 +608,8 @@ impl FirebaseClient {
     }
 
     /// Batch write multiple tracks (up to 500 per batch for optimal performance)
-    pub async fn batch_write_tracks(&mut self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
-        self.ensure_valid_token().await?;
+    pub async fn batch_write_tracks(&self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
+        // Note: For batch operations, we don't check token expiry as they are typically quick
         
         if tracks.is_empty() {
             return Ok(());
@@ -652,17 +672,18 @@ impl FirebaseClient {
         Ok(())
     }
 
-    /// Migrate queue tracks to priority-based subcollections
+    /// Migrate queue tracks to priority-based structure using batch processing
     pub async fn migrate_queue_to_subcollections(&mut self, queued_tracks: &[crate::log::QueuedTrack]) -> AuthResult<()> {
         self.ensure_valid_token().await?;
+        
         let total = queued_tracks.len();
         let start_time = std::time::Instant::now();
         let mut completed = 0;
         let mut failed = 0;
         
         for (index, track) in queued_tracks.iter().enumerate() {
-            // Check token every 100 tracks or if this is the first track
-            if index == 0 || index % 100 == 0 {
+            // Check token every 100 tracks
+            if index % 100 == 0 {
                 self.ensure_valid_token().await?;
             }
             

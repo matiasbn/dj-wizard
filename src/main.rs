@@ -105,9 +105,9 @@ enum DjWizardCommands {
         /// Migrate tracks as individual documents for O(1) access (super fast)
         #[clap(long)]
         individual_tracks: bool,
-        /// Migrate queue to priority-based subcollections structure
+        /// Migrate queue to priority-based structure
         #[clap(long)]
-        queue_subcollections: bool,
+        queue: bool,
     },
 }
 
@@ -266,7 +266,7 @@ impl DjWizardCommands {
                 soundeo,
                 remaining,
                 individual_tracks,
-                queue_subcollections,
+                queue,
             } => {
                 use crate::auth::firebase_client::FirebaseClient;
                 use crate::auth::google_auth::GoogleAuth;
@@ -807,9 +807,9 @@ impl DjWizardCommands {
                     return Ok(());
                 }
 
-                if *queue_subcollections {
-                    // Queue subcollections migration mode
-                    println!("📋 Queue subcollections mode: Migrating to priority-based structure...");
+                if *queue {
+                    // Queue migration mode
+                    println!("📋 Queue mode: Migrating to priority-based structure...");
 
                     // Read current queue from DjWizardLog
                     use crate::log::DjWizardLog;
@@ -828,7 +828,7 @@ impl DjWizardCommands {
                     
                     println!("📊 Found {} pending queued tracks to migrate", queued_tracks.len());
                     
-                    // Migrate to subcollections
+                    // Migrate to priority-based structure
                     firebase_client
                         .migrate_queue_to_subcollections(&queued_tracks)
                         .await
@@ -988,7 +988,7 @@ impl DjWizardCommands {
                 soundeo,
                 remaining,
                 individual_tracks,
-                queue_subcollections,
+                queue,
             } => {
                 let mut cmd = "dj-wizard migrate".to_string();
                 if let Some(log_path) = soundeo_log {

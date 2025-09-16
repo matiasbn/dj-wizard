@@ -27,6 +27,74 @@ impl GoogleAuth {
     pub fn new() -> Self {
         Self
     }
+    
+    /// Refresh access token using refresh token (no user interaction required)
+    pub async fn refresh_token(refresh_token: &str) -> AuthResult<AuthToken> {
+        let client = Self::create_oauth_client()?;
+        
+        println!("🔄 Refreshing access token automatically...");
+        
+        let token_result = client
+            .exchange_refresh_token(&oauth2::RefreshToken::new(refresh_token.to_string()))
+            .request_async(async_http_client)
+            .await
+            .into_report()
+            .change_context(AuthError::new("Failed to refresh token"))?;
+        
+        let access_token = token_result.access_token().secret().clone();
+        let new_refresh_token = token_result.refresh_token()
+            .map(|rt| rt.secret().clone())
+            .or(Some(refresh_token.to_string())); // Keep old refresh token if new one not provided
+        
+        // Calculate expiration time (default to 1 hour if not provided)
+        let expires_in = token_result.expires_in()
+            .unwrap_or(Duration::from_secs(3600));
+        let expires_at = chrono::Utc::now() + chrono::Duration::from_std(expires_in)
+            .into_report()
+            .change_context(AuthError::new("Invalid expiration duration"))?;
+        
+        // Get user info using new access token
+        let google_auth = GoogleAuth::new();
+        let user_info = google_auth.get_user_info(&access_token).await?;
+        
+        let auth_token = AuthToken {
+            access_token,
+            refresh_token: new_refresh_token,
+            expires_at,
+            user_email: user_info.email,
+            user_id: user_info.id,
+        };
+        
+        // Save the refreshed token
+        let google_auth = GoogleAuth::new();
+        google_auth.save_token(&auth_token)?;
+        
+        println!("✅ Token refreshed successfully (no browser required)");
+        Ok(auth_token)
+    }
+    
+    fn create_oauth_client() -> AuthResult<BasicClient> {
+        let client_id = ClientId::new(AppConfig::GOOGLE_OAUTH_CLIENT_ID.to_string());
+        
+        // Get client secret from environment variable
+        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
+            .into_report()
+            .change_context(AuthError::new("GOOGLE_CLIENT_SECRET environment variable not set"))?;
+        
+        let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+            .into_report()
+            .change_context(AuthError::new("Invalid auth URL"))?;
+        let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v4/token".to_string())
+            .into_report()
+            .change_context(AuthError::new("Invalid token URL"))?;
+        
+        Ok(BasicClient::new(
+            client_id,
+            Some(ClientSecret::new(client_secret)),
+            auth_url,
+            Some(token_url),
+        ))
+    }
 
     pub async fn login(&self) -> AuthResult<AuthToken> {
         println!("{}", "🔐 Initiating Google authentication...".cyan());
