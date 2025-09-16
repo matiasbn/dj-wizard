@@ -39,7 +39,7 @@ impl FirebaseClient {
     /// Ensure token is valid, refresh if needed
     async fn ensure_valid_token(&mut self) -> AuthResult<()> {
         use crate::auth::google_auth::GoogleAuth;
-        
+
         // Check if token expires within 5 minutes
         let expires_soon = self.token_expires_at - chrono::Duration::minutes(5);
         if chrono::Utc::now() > expires_soon {
@@ -63,12 +63,12 @@ impl FirebaseClient {
                     .await
                     .map_err(|_| AuthError::new("Failed to login"))?
             };
-            
+
             self.access_token = new_token.access_token;
             self.refresh_token = new_token.refresh_token;
             self.token_expires_at = new_token.expires_at;
         }
-        
+
         Ok(())
     }
 
@@ -178,7 +178,7 @@ impl FirebaseClient {
                 } else {
                     serde_json::json!({"stringValue": n.to_string()})
                 }
-            },
+            }
             Value::Bool(b) => serde_json::json!({"booleanValue": b}),
             Value::Array(arr) => serde_json::json!({
                 "arrayValue": {
@@ -336,18 +336,101 @@ impl FirebaseClient {
         let data = serde_json::to_value(genre_tracker)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
-        self.set_document("genre_tracker", "main", &data).await
+        // Save directly to genre_tracker document (no subdocument)
+        let url = format!(
+            "{}/users/{}/genre_tracker/main",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id)
+        );
+
+        let firestore_doc = serde_json::json!({
+            "fields": self.convert_object_to_firestore_fields(data.as_object().unwrap_or(&serde_json::Map::new()))
+        });
+
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .json(&firestore_doc)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to save genre tracker: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            return Err(AuthError::new(&format!("Failed to save genre tracker: {}", error_text)).into());
+        }
+
+        Ok(())
     }
 
     /// Load genre tracker from Firestore
     pub async fn load_genre_tracker(&self) -> AuthResult<Option<GenreTracker>> {
-        match self.get_document("genre_tracker", "main").await? {
-            Some(data) => {
-                let genre_tracker: GenreTracker = serde_json::from_value(data)
-                    .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
-                Ok(Some(genre_tracker))
+        // Load directly from genre_tracker document (no subdocument)
+        let url = format!(
+            "{}/users/{}/genre_tracker/main",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id)
+        );
+
+        let response = self.client
+            .get(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to get genre tracker: {}", e)))?;
+
+        match response.status().as_u16() {
+            200 => {
+                let firestore_doc: serde_json::Value = response.json().await
+                    .map_err(|e| AuthError::new(&format!("Failed to parse response: {}", e)))?;
+                
+                if let Some(fields) = firestore_doc["fields"].as_object() {
+                    let converted_data = self.convert_firestore_fields_to_json(fields);
+                    let genre_tracker: GenreTracker = serde_json::from_value(converted_data)
+                        .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
+                    Ok(Some(genre_tracker))
+                } else {
+                    Ok(None)
+                }
             }
-            None => Ok(None),
+            404 => Ok(None),
+            _ => {
+                let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+                Err(AuthError::new(&format!("Failed to load genre tracker: {}", error_text)).into())
+            }
+        }
+    }
+    
+    /// Convert Firestore fields back to regular JSON
+    fn convert_firestore_fields_to_json(&self, fields: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+        let mut result = serde_json::Map::new();
+        for (key, field_value) in fields {
+            if let Some(converted) = self.convert_firestore_field_to_json(field_value) {
+                result.insert(key.clone(), converted);
+            }
+        }
+        serde_json::Value::Object(result)
+    }
+    
+    /// Convert a single Firestore field back to JSON value
+    fn convert_firestore_field_to_json(&self, field: &serde_json::Value) -> Option<serde_json::Value> {
+        if let Some(string_val) = field["stringValue"].as_str() {
+            Some(serde_json::Value::String(string_val.to_string()))
+        } else if let Some(int_val) = field["integerValue"].as_str().and_then(|s| s.parse::<i64>().ok()) {
+            Some(serde_json::Value::Number(serde_json::Number::from(int_val)))
+        } else if let Some(double_val) = field["doubleValue"].as_f64() {
+            Some(serde_json::Value::Number(serde_json::Number::from_f64(double_val)?))
+        } else if let Some(bool_val) = field["booleanValue"].as_bool() {
+            Some(serde_json::Value::Bool(bool_val))
+        } else if let Some(array_val) = field["arrayValue"]["values"].as_array() {
+            let converted_array: Vec<serde_json::Value> = array_val.iter()
+                .filter_map(|v| self.convert_firestore_field_to_json(v))
+                .collect();
+            Some(serde_json::Value::Array(converted_array))
+        } else if let Some(map_fields) = field["mapValue"]["fields"].as_object() {
+            Some(self.convert_firestore_fields_to_json(map_fields))
+        } else {
+            None
         }
     }
 
@@ -508,7 +591,11 @@ impl FirebaseClient {
     // Individual Track CRUD operations for O(1) access
 
     /// Save a single track to Firebase (O(1) access by ID)
-    pub async fn save_track(&self, track_id: &str, track: &crate::soundeo::track::SoundeoTrack) -> AuthResult<()> {
+    pub async fn save_track(
+        &self,
+        track_id: &str,
+        track: &crate::soundeo::track::SoundeoTrack,
+    ) -> AuthResult<()> {
         let data = serde_json::to_value(track)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
@@ -517,7 +604,10 @@ impl FirebaseClient {
     }
 
     /// Get a single track from Firebase by ID (O(1) access)
-    pub async fn get_track(&self, track_id: &str) -> AuthResult<Option<crate::soundeo::track::SoundeoTrack>> {
+    pub async fn get_track(
+        &self,
+        track_id: &str,
+    ) -> AuthResult<Option<crate::soundeo::track::SoundeoTrack>> {
         match self.get_document("soundeo_tracks", track_id).await? {
             Some(data) => {
                 let track: crate::soundeo::track::SoundeoTrack = serde_json::from_value(data)
@@ -529,18 +619,21 @@ impl FirebaseClient {
     }
 
     /// Get multiple tracks from Firebase by IDs (O(n) batch access)
-    pub async fn get_tracks(&self, track_ids: &[String]) -> AuthResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
+    pub async fn get_tracks(
+        &self,
+        track_ids: &[String],
+    ) -> AuthResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
         use futures_util::stream::{FuturesUnordered, StreamExt};
         use std::sync::Arc;
 
         let client = Arc::new(self);
         let mut futures = FuturesUnordered::new();
-        
+
         // Create concurrent requests for all track IDs
         for track_id in track_ids {
             let client_clone = client.clone();
             let id = track_id.clone();
-            
+
             let future = async move {
                 let result = client_clone.get_track(&id).await;
                 (id, result)
@@ -549,7 +642,7 @@ impl FirebaseClient {
         }
 
         let mut tracks = std::collections::HashMap::new();
-        
+
         // Collect all results
         while let Some((track_id, result)) = futures.next().await {
             match result {
@@ -603,16 +696,21 @@ impl FirebaseClient {
     }
 
     /// Batch write multiple tracks (up to 500 per batch for optimal performance)
-    pub async fn batch_write_tracks(&self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
+    pub async fn batch_write_tracks(
+        &self,
+        tracks: &[(String, crate::soundeo::track::SoundeoTrack)],
+    ) -> AuthResult<()> {
         // Note: For batch operations, we don't check token expiry as they are typically quick
-        
+
         if tracks.is_empty() {
             return Ok(());
         }
 
         // Firebase batch write limit is 500 operations
         if tracks.len() > 500 {
-            return Err(AuthError::new("Batch size exceeds Firebase limit of 500 operations").into());
+            return Err(
+                AuthError::new("Batch size exceeds Firebase limit of 500 operations").into(),
+            );
         }
 
         let user_id = &self.user_id;
@@ -631,13 +729,36 @@ impl FirebaseClient {
 
             // Only include essential fields for Firebase
             let mut fields = serde_json::Map::new();
-            fields.insert("id".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.id.clone())));
-            fields.insert("title".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.title.clone())));
-            fields.insert("track_url".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.track_url.clone())));
-            fields.insert("date".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.date.clone())));
-            fields.insert("genre".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.genre.clone())));
-            fields.insert("downloadable".to_string(), self.convert_to_firestore_value(&serde_json::Value::Bool(track.downloadable)));
-            fields.insert("already_downloaded".to_string(), self.convert_to_firestore_value(&serde_json::Value::Bool(track.already_downloaded)));
+            fields.insert(
+                "id".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::String(track.id.clone())),
+            );
+            fields.insert(
+                "title".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::String(track.title.clone())),
+            );
+            fields.insert(
+                "track_url".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::String(
+                    track.track_url.clone(),
+                )),
+            );
+            fields.insert(
+                "date".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::String(track.date.clone())),
+            );
+            fields.insert(
+                "genre".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::String(track.genre.clone())),
+            );
+            fields.insert(
+                "downloadable".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::Bool(track.downloadable)),
+            );
+            fields.insert(
+                "already_downloaded".to_string(),
+                self.convert_to_firestore_value(&serde_json::Value::Bool(track.already_downloaded)),
+            );
 
             writes.push(serde_json::json!({
                 "update": {
@@ -651,7 +772,8 @@ impl FirebaseClient {
             "writes": writes
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&batch_url)
             .bearer_auth(&self.access_token)
             .json(&batch_request)
@@ -661,7 +783,9 @@ impl FirebaseClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(AuthError::new(&format!("Firestore batch write error: {}", error_text)).into());
+            return Err(
+                AuthError::new(&format!("Firestore batch write error: {}", error_text)).into(),
+            );
         }
 
         // Mark all tracks in the batch as migrated (save is automatic)
@@ -673,54 +797,70 @@ impl FirebaseClient {
     }
 
     /// Migrate queue tracks to priority-based structure using batch processing
-    pub async fn migrate_queue_to_subcollections(&mut self, queued_tracks: &[crate::log::QueuedTrack]) -> AuthResult<()> {
+    pub async fn migrate_queue_to_subcollections(
+        &mut self,
+        queued_tracks: &[crate::log::QueuedTrack],
+    ) -> AuthResult<()> {
         self.ensure_valid_token().await?;
-        
+
         // STEP 1: Get existing queued tracks from Firebase and mark them as migrated locally
         println!("🔍 Checking existing queued tracks in Firebase...");
         let existing_ids = self.get_all_firebase_queue_ids().await.unwrap_or_default();
-        println!("📊 Found {} existing queued tracks in Firebase", existing_ids.len());
-        
+        println!(
+            "📊 Found {} existing queued tracks in Firebase",
+            existing_ids.len()
+        );
+
         if !existing_ids.is_empty() {
-            println!("📝 Storing {} existing queued track IDs in bulk locally...", existing_ids.len());
+            println!(
+                "📝 Storing {} existing queued track IDs in bulk locally...",
+                existing_ids.len()
+            );
             let _ = crate::log::DjWizardLog::set_firebase_migrated_queues(existing_ids.clone());
             println!("✅ Stored existing queued track IDs in bulk (single save operation)");
         }
-        
+
         // STEP 2: Filter only tracks NOT in Firebase
         let tracks_to_migrate: Vec<&crate::log::QueuedTrack> = queued_tracks
             .iter()
             .filter(|track| !existing_ids.contains(&track.track_id))
             .collect();
-        
+
         if tracks_to_migrate.is_empty() {
             println!("✅ All queued tracks already exist in Firebase");
             return Ok(());
         }
-        
-        println!("📋 Will migrate {} new queued tracks to Firebase", tracks_to_migrate.len());
-        
+
+        println!(
+            "📋 Will migrate {} new queued tracks to Firebase",
+            tracks_to_migrate.len()
+        );
+
         let total = tracks_to_migrate.len();
         let start_time = std::time::Instant::now();
         let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        
+
         let concurrent_batches = 2;
-        
+
         // Initialize status display - statistics line + worker lines
-        println!("📋 Queue: 0/{} | ✅ 0 ❌ 0 | ⏱️ 0s | 🚀 0.0/min | ⏳ ∞", total);
+        println!(
+            "📋 Queue: 0/{} | ✅ 0 ❌ 0 | ⏱️ 0s | 🚀 0.0/min | ⏳ ∞",
+            total
+        );
         for i in 0..concurrent_batches {
             println!("Batch Thread {}: Waiting...", i);
         }
-        
+
         // Share start time for rate calculation
         let start_time = std::sync::Arc::new(start_time);
-        
-        // Convert to shared queue  
-        let tracks_to_migrate_owned: Vec<crate::log::QueuedTrack> = tracks_to_migrate.into_iter().cloned().collect();
+
+        // Convert to shared queue
+        let tracks_to_migrate_owned: Vec<crate::log::QueuedTrack> =
+            tracks_to_migrate.into_iter().cloned().collect();
         let tracks_queue = std::sync::Arc::new(tokio::sync::Mutex::new(tracks_to_migrate_owned));
-        
+
         // Spawn 2 worker threads
         let mut tasks = Vec::new();
         for thread_id in 0..concurrent_batches {
@@ -733,7 +873,7 @@ impl FirebaseClient {
             let failed_clone = failed.clone();
             let processed_clone = processed.clone();
             let start_time_clone = start_time.clone();
-            
+
             let task = tokio::spawn(async move {
                 // Small delay to stagger worker startup
                 if thread_id > 0 {
@@ -741,31 +881,31 @@ impl FirebaseClient {
                 }
                 Self::process_queue_worker(
                     tracks_queue,
-                    client, 
-                    access_token, 
-                    user_id, 
+                    client,
+                    access_token,
+                    user_id,
                     firestore_url,
                     completed_clone,
                     failed_clone,
                     processed_clone,
                     thread_id,
                     start_time_clone,
-                    total
-                ).await
+                    total,
+                )
+                .await
             });
-            
+
             tasks.push(task);
         }
-        
+
         // Wait for all workers to complete
         for task in tasks {
             let _ = task.await;
         }
-        
+
         // Check token periodically during processing
         self.ensure_valid_token().await?;
-        
-        
+
         // Move cursor to statistics line for final update
         print!("\x1B[{}A", concurrent_batches);
         let final_elapsed = start_time.elapsed();
@@ -776,19 +916,25 @@ impl FirebaseClient {
         } else {
             0.0
         };
-        
-        print!("\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ✅ Complete!", 
-                 total, total, final_completed, final_failed, final_elapsed, final_rate);
+
+        print!(
+            "\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ✅ Complete!",
+            total, total, final_completed, final_failed, final_elapsed, final_rate
+        );
         print!("\x1B[{}B", concurrent_batches);
         println!();
-        
+
         if final_failed > 0 {
-            return Err(AuthError::new(&format!("Migration completed with {} failures", final_failed)).into());
+            return Err(AuthError::new(&format!(
+                "Migration completed with {} failures",
+                final_failed
+            ))
+            .into());
         }
-        
+
         Ok(())
     }
-    
+
     async fn process_queue_worker(
         tracks_queue: std::sync::Arc<tokio::sync::Mutex<Vec<crate::log::QueuedTrack>>>,
         client: reqwest::Client,
@@ -803,14 +949,14 @@ impl FirebaseClient {
         total: usize,
     ) {
         let concurrent_batches = 2;
-        
+
         loop {
             // Get next track from queue (quick lock/unlock)
             let track = {
                 let mut queue = tracks_queue.lock().await;
                 queue.pop()
             };
-            
+
             let Some(track) = track else {
                 // No more tracks, show waiting
                 print!("\x1B[{}A", concurrent_batches - thread_id);
@@ -819,28 +965,35 @@ impl FirebaseClient {
                 std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
                 break;
             };
-            
+
             // Show processing this track
             print!("\x1B[{}A", concurrent_batches - thread_id);
-            print!("\x1B[2K\rBatch Thread {}: Processing {}", thread_id, track.track_id);
+            print!(
+                "\x1B[2K\rBatch Thread {}: Processing {}",
+                thread_id, track.track_id
+            );
             print!("\x1B[{}B", concurrent_batches - thread_id);
             std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
-            
+
             let priority_name = match track.priority {
                 crate::log::Priority::High => "high",
-                crate::log::Priority::Normal => "normal", 
+                crate::log::Priority::Normal => "normal",
                 crate::log::Priority::Low => "low",
             };
-            
+
             let url = format!(
                 "{}/users/{}/queued_tracks/{}",
                 firestore_url, user_id, track.track_id
             );
-            
+
             let result = client
                 .patch(&url)
                 .bearer_auth(&access_token)
-                .query(&[("updateMask.fieldPaths", "track_id"), ("updateMask.fieldPaths", "order_key"), ("updateMask.fieldPaths", "priority")])
+                .query(&[
+                    ("updateMask.fieldPaths", "track_id"),
+                    ("updateMask.fieldPaths", "order_key"),
+                    ("updateMask.fieldPaths", "priority"),
+                ])
                 .json(&serde_json::json!({
                     "fields": {
                         "track_id": {"stringValue": track.track_id},
@@ -850,7 +1003,7 @@ impl FirebaseClient {
                 }))
                 .send()
                 .await;
-                
+
             match result {
                 Ok(response) if response.status().is_success() => {
                     completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -860,21 +1013,21 @@ impl FirebaseClient {
                     failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-            
+
             processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            
+
             // Update statistics after each track
             let elapsed = start_time.elapsed();
             let current_processed = processed.load(std::sync::atomic::Ordering::Relaxed);
             let current_completed = completed.load(std::sync::atomic::Ordering::Relaxed);
             let current_failed = failed.load(std::sync::atomic::Ordering::Relaxed);
-            
+
             let rate = if elapsed.as_secs() > 0 {
                 (current_completed as f64 / elapsed.as_secs_f64()) * 60.0
             } else {
                 0.0
             };
-            
+
             let eta = if rate > 0.0 {
                 let remaining = total - current_processed;
                 let minutes_remaining = remaining as f64 / rate;
@@ -886,11 +1039,13 @@ impl FirebaseClient {
             } else {
                 "∞".to_string()
             };
-            
+
             // Update statistics line (move up 2 lines, update, move back down)
             print!("\x1B[{}A", concurrent_batches);
-            print!("\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ⏳ {}", 
-                   current_processed, total, current_completed, current_failed, elapsed, rate, eta);
+            print!(
+                "\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ⏳ {}",
+                current_processed, total, current_completed, current_failed, elapsed, rate, eta
+            );
             print!("\x1B[{}B", concurrent_batches);
             std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
         }
@@ -900,18 +1055,20 @@ impl FirebaseClient {
     pub async fn get_all_firebase_track_ids(&self) -> AuthResult<Vec<String>> {
         let mut track_ids = Vec::new();
         let mut page_token: Option<String> = None;
-        
+
         loop {
             let mut url = format!(
                 "{}/users/{}/soundeo_tracks?pageSize=1000",
-                self.firestore_url(), self.user_id
+                self.firestore_url(),
+                self.user_id
             );
-            
+
             if let Some(token) = &page_token {
                 url.push_str(&format!("&pageToken={}", token));
             }
 
-            let response = self.client
+            let response = self
+                .client
                 .get(&url)
                 .bearer_auth(&self.access_token)
                 .send()
@@ -923,7 +1080,9 @@ impl FirebaseClient {
                 return Err(AuthError::new(&format!("Firebase get error: {}", error_text)).into());
             }
 
-            let response_text = response.text().await
+            let response_text = response
+                .text()
+                .await
                 .map_err(|e| AuthError::new(&format!("Failed to read response: {}", e)))?;
 
             let json: serde_json::Value = serde_json::from_str(&response_text)
@@ -940,10 +1099,13 @@ impl FirebaseClient {
                     }
                 }
             }
-            
+
             // Check for next page token
-            page_token = json.get("nextPageToken").and_then(|t| t.as_str()).map(|s| s.to_string());
-            
+            page_token = json
+                .get("nextPageToken")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+
             // If no next page token, we're done
             if page_token.is_none() {
                 break;
@@ -957,18 +1119,20 @@ impl FirebaseClient {
     pub async fn get_all_firebase_queue_ids(&self) -> AuthResult<Vec<String>> {
         let mut track_ids = Vec::new();
         let mut page_token: Option<String> = None;
-        
+
         loop {
             let mut url = format!(
                 "{}/users/{}/queued_tracks?pageSize=1000",
-                self.firestore_url(), self.user_id
+                self.firestore_url(),
+                self.user_id
             );
-            
+
             if let Some(token) = &page_token {
                 url.push_str(&format!("&pageToken={}", token));
             }
 
-            let response = self.client
+            let response = self
+                .client
                 .get(&url)
                 .bearer_auth(&self.access_token)
                 .send()
@@ -980,7 +1144,9 @@ impl FirebaseClient {
                 return Err(AuthError::new(&format!("Firebase get error: {}", error_text)).into());
             }
 
-            let response_text = response.text().await
+            let response_text = response
+                .text()
+                .await
                 .map_err(|e| AuthError::new(&format!("Failed to read response: {}", e)))?;
 
             let json: serde_json::Value = serde_json::from_str(&response_text)
@@ -997,10 +1163,13 @@ impl FirebaseClient {
                     }
                 }
             }
-            
+
             // Check for next page token
-            page_token = json.get("nextPageToken").and_then(|t| t.as_str()).map(|s| s.to_string());
-            
+            page_token = json
+                .get("nextPageToken")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+
             // If no next page token, we're done
             if page_token.is_none() {
                 break;
@@ -1028,7 +1197,8 @@ impl FirebaseClient {
                 url = format!("{}&pageToken={}", url, token);
             }
 
-            let response = self.client
+            let response = self
+                .client
                 .get(&url)
                 .bearer_auth(&self.access_token)
                 .send()
@@ -1036,19 +1206,31 @@ impl FirebaseClient {
                 .map_err(|e| AuthError::new(&format!("Failed to get queued tracks: {}", e)))?;
 
             if !response.status().is_success() {
-                return Err(AuthError::new(&format!("Firebase returned error: {}", response.status())).into());
+                return Err(AuthError::new(&format!(
+                    "Firebase returned error: {}",
+                    response.status()
+                ))
+                .into());
             }
 
-            let data: serde_json::Value = response.json().await
+            let data: serde_json::Value = response
+                .json()
+                .await
                 .map_err(|e| AuthError::new(&format!("Failed to parse response: {}", e)))?;
 
             if let Some(documents) = data["documents"].as_array() {
                 for doc in documents {
                     if let Some(fields) = doc["fields"].as_object() {
                         if let (Some(track_id), Some(priority), Some(order_key)) = (
-                            fields.get("track_id").and_then(|f| f["stringValue"].as_str()),
-                            fields.get("priority").and_then(|f| f["stringValue"].as_str()),
-                            fields.get("order_key").and_then(|f| f["doubleValue"].as_f64())
+                            fields
+                                .get("track_id")
+                                .and_then(|f| f["stringValue"].as_str()),
+                            fields
+                                .get("priority")
+                                .and_then(|f| f["stringValue"].as_str()),
+                            fields
+                                .get("order_key")
+                                .and_then(|f| f["doubleValue"].as_f64()),
                         ) {
                             let priority = match priority {
                                 "High" => crate::log::Priority::High,
@@ -1058,7 +1240,8 @@ impl FirebaseClient {
                             };
 
                             // Use order_key as fallback for added_at since it's missing in Firebase
-                            let added_at = fields.get("added_at")
+                            let added_at = fields
+                                .get("added_at")
                                 .and_then(|f| f["integerValue"].as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .unwrap_or(order_key as u64);
@@ -1085,7 +1268,11 @@ impl FirebaseClient {
     }
 
     /// Add a single track to Firebase queue
-    pub async fn add_queued_track(&self, track_id: &str, priority: crate::log::Priority) -> AuthResult<bool> {
+    pub async fn add_queued_track(
+        &self,
+        track_id: &str,
+        priority: crate::log::Priority,
+    ) -> AuthResult<bool> {
         // Check if track already exists
         if self.queued_track_exists(track_id).await? {
             return Ok(false); // Already exists
@@ -1099,7 +1286,7 @@ impl FirebaseClient {
 
         let priority_str = match priority {
             crate::log::Priority::High => "High",
-            crate::log::Priority::Normal => "Normal", 
+            crate::log::Priority::Normal => "Normal",
             crate::log::Priority::Low => "Low",
         };
 
@@ -1119,7 +1306,8 @@ impl FirebaseClient {
             track_id
         );
 
-        let response = self.client
+        let response = self
+            .client
             .patch(&url)
             .bearer_auth(&self.access_token)
             .json(&document_data)
@@ -1130,7 +1318,11 @@ impl FirebaseClient {
         if response.status().is_success() {
             Ok(true) // Added successfully
         } else {
-            Err(AuthError::new(&format!("Failed to add queued track: {}", response.status())).into())
+            Err(AuthError::new(&format!(
+                "Failed to add queued track: {}",
+                response.status()
+            ))
+            .into())
         }
     }
 
@@ -1143,7 +1335,8 @@ impl FirebaseClient {
             track_id
         );
 
-        let response = self.client
+        let response = self
+            .client
             .delete(&url)
             .bearer_auth(&self.access_token)
             .send()
@@ -1151,9 +1344,13 @@ impl FirebaseClient {
             .map_err(|e| AuthError::new(&format!("Failed to remove queued track: {}", e)))?;
 
         match response.status().as_u16() {
-            200 => Ok(true), // Successfully deleted
+            200 => Ok(true),  // Successfully deleted
             404 => Ok(false), // Track wasn't in queue anyway
-            _ => Err(AuthError::new(&format!("Failed to remove queued track: {}", response.status())).into())
+            _ => Err(AuthError::new(&format!(
+                "Failed to remove queued track: {}",
+                response.status()
+            ))
+            .into()),
         }
     }
 
@@ -1166,7 +1363,8 @@ impl FirebaseClient {
             track_id
         );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .bearer_auth(&self.access_token)
             .send()
@@ -1177,7 +1375,11 @@ impl FirebaseClient {
     }
 
     /// Update priority of an existing queued track
-    pub async fn update_queued_track_priority(&self, track_id: &str, new_priority: crate::log::Priority) -> AuthResult<bool> {
+    pub async fn update_queued_track_priority(
+        &self,
+        track_id: &str,
+        new_priority: crate::log::Priority,
+    ) -> AuthResult<bool> {
         // Check if track exists first
         if !self.queued_track_exists(track_id).await? {
             return Ok(false); // Track not in queue
@@ -1185,7 +1387,7 @@ impl FirebaseClient {
 
         let priority_str = match new_priority {
             crate::log::Priority::High => "High",
-            crate::log::Priority::Normal => "Normal", 
+            crate::log::Priority::Normal => "Normal",
             crate::log::Priority::Low => "Low",
         };
 
@@ -1202,20 +1404,216 @@ impl FirebaseClient {
             track_id
         );
 
-        let response = self.client
+        let response = self
+            .client
             .patch(&url)
             .bearer_auth(&self.access_token)
             .query(&[("updateMask.fieldPaths", "priority")])
             .json(&update_data)
             .send()
             .await
-            .map_err(|e| AuthError::new(&format!("Failed to update queued track priority: {}", e)))?;
+            .map_err(|e| {
+                AuthError::new(&format!("Failed to update queued track priority: {}", e))
+            })?;
 
         if response.status().is_success() {
             Ok(true) // Updated successfully
         } else {
-            Err(AuthError::new(&format!("Failed to update queued track priority: {}", response.status())).into())
+            Err(AuthError::new(&format!(
+                "Failed to update queued track priority: {}",
+                response.status()
+            ))
+            .into())
         }
     }
 
+    // Additional collections migration methods for light_only
+
+    /// Save available_tracks collection to Firebase using batch write
+    pub async fn save_available_tracks(
+        &self,
+        available_tracks: &std::collections::HashSet<String>,
+    ) -> AuthResult<()> {
+        let total = available_tracks.len();
+        println!(
+            "📋 Migrating {} available tracks to Firebase using batch processing...",
+            total
+        );
+
+        if available_tracks.is_empty() {
+            println!("✅ No available tracks to migrate.");
+            return Ok(());
+        }
+
+        // Convert to batch format (max 500 per batch)
+        let batch_size = 20;
+        let tracks: Vec<&String> = available_tracks.iter().collect();
+        let chunks: Vec<&[&String]> = tracks.chunks(batch_size).collect();
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            println!(
+                "📦 Processing batch {}/{} ({} tracks)...",
+                i + 1,
+                chunks.len(),
+                chunk.len()
+            );
+
+            let mut writes = Vec::new();
+
+            for track_id in *chunk {
+                let document_name = format!(
+                    "projects/{}/databases/(default)/documents/users/{}/available_tracks/{}",
+                    self.project_id, self.user_id, track_id
+                );
+
+                let mut fields = std::collections::HashMap::new();
+                fields.insert(
+                    "track_id".to_string(),
+                    self.convert_to_firestore_value(&serde_json::Value::String(
+                        track_id.to_string(),
+                    )),
+                );
+                fields.insert(
+                    "added_at".to_string(),
+                    self.convert_to_firestore_value(&serde_json::Value::Number(
+                        serde_json::Number::from(chrono::Utc::now().timestamp()),
+                    )),
+                );
+
+                writes.push(serde_json::json!({
+                    "update": {
+                        "name": document_name,
+                        "fields": fields
+                    }
+                }));
+            }
+
+            // Send batch request
+            let batch_data = serde_json::json!({
+                "writes": writes
+            });
+
+            let batch_url = format!(
+                "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents:batchWrite",
+                self.project_id
+            );
+
+            let response = self
+                .client
+                .post(&batch_url)
+                .bearer_auth(&self.access_token)
+                .json(&batch_data)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("Batch request failed: {}", e)))?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+                return Err(AuthError::new(&format!("Batch write failed: {}", error_text)).into());
+            }
+
+            let processed = (i + 1) * batch_size.min(chunk.len());
+            println!(
+                "✅ Processed {}/{} available tracks",
+                processed.min(total),
+                total
+            );
+        }
+
+        println!("✅ All {} available tracks migrated successfully!", total);
+        Ok(())
+    }
+
+    /// Save spotify collection to Firebase
+    pub async fn save_spotify_collection(
+        &self,
+        spotify: &crate::spotify::Spotify,
+    ) -> AuthResult<()> {
+        let data = serde_json::to_value(spotify)
+            .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
+
+        // Save directly to spotify_data document (no subdocument)
+        let url = format!(
+            "{}/users/{}/spotify_data/main",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id)
+        );
+
+        let firestore_doc = serde_json::json!({
+            "fields": self.convert_object_to_firestore_fields(data.as_object().unwrap_or(&serde_json::Map::new()))
+        });
+
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .json(&firestore_doc)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to save spotify data: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            return Err(AuthError::new(&format!("Failed to save spotify data: {}", error_text)).into());
+        }
+
+        println!("✅ Spotify collection migrated successfully!");
+        Ok(())
+    }
+
+    /// Convert a JSON object to Firestore fields format
+    fn convert_object_to_firestore_fields(&self, obj: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        for (key, value) in obj {
+            fields.insert(key.clone(), self.convert_to_firestore_value(value));
+        }
+        fields
+    }
+
+    /// Save url_list collection to Firebase
+    pub async fn save_url_list(
+        &self,
+        url_list: &std::collections::HashSet<String>,
+    ) -> AuthResult<()> {
+        println!("📋 Migrating {} URLs to Firebase...", url_list.len());
+
+        for url in url_list {
+            let document_data = serde_json::json!({
+                "fields": {
+                    "url": {"stringValue": url},
+                    "added_at": {"integerValue": chrono::Utc::now().timestamp().to_string()}
+                }
+            });
+
+            // Use URL hash as document ID to avoid issues with special characters
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            url.hash(&mut hasher);
+            let url_hash = format!("{:x}", hasher.finish());
+            let doc_url = format!(
+                "{}/users/{}/url_list/{}",
+                self.firestore_url(),
+                urlencoding::encode(&self.user_id),
+                url_hash
+            );
+
+            let response = self
+                .client
+                .patch(&doc_url)
+                .bearer_auth(&self.access_token)
+                .json(&document_data)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("Failed to save URL: {}", e)))?;
+
+            if !response.status().is_success() {
+                return Err(
+                    AuthError::new(&format!("Failed to save URL: {}", response.status())).into(),
+                );
+            }
+        }
+
+        println!("✅ URL list migrated successfully!");
+        Ok(())
+    }
 }

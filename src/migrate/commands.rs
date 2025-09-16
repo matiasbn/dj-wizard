@@ -698,29 +698,57 @@ impl MigrateCli {
             }
         }
 
-        let final_data = if *light_only {
-            println!("🪶 Light mode: Filtering out heavy fields...");
+        if *light_only {
+            println!("🪶 Light mode: Migrating collections separately...");
 
-            // Extract only light fields, exclude heavy ones
-            if let serde_json::Value::Object(mut map) = json_value {
-                // Remove heavy fields
-                let removed_soundeo = map.remove("soundeo");
-                let removed_queued = map.remove("queued_tracks");
+            // Parse the JSON as DjWizardLog struct to extract specific fields
+            let log_data: crate::log::DjWizardLog = serde_json::from_value(json_value.clone())
+                .map_err(|e| {
+                    eprintln!("❌ Failed to parse JSON as DjWizardLog: {}", e);
+                    MigrateError
+                })?;
 
-                if removed_soundeo.is_some() {
-                    println!("🗑️  Excluded 'soundeo' field");
-                }
-                if removed_queued.is_some() {
-                    println!("🗑️  Excluded 'queued_tracks' field");
-                }
+            // Migrate each collection separately
+            println!("📁 Migrating artist_manager...");
+            firebase_client.save_artists(&log_data.artist_manager).await
+                .map_err(|e| {
+                    eprintln!("Failed to migrate artist_manager: {}", e);
+                    MigrateError
+                })?;
 
-                println!("✅ Remaining fields: {:?}", map.keys().collect::<Vec<_>>());
-                serde_json::Value::Object(map)
-            } else {
-                println!("⚠️  JSON is not an object, uploading as-is");
-                json_value
-            }
-        } else {
+            println!("📁 Migrating available_tracks...");
+            firebase_client.save_available_tracks(&log_data.available_tracks).await
+                .map_err(|e| {
+                    eprintln!("Failed to migrate available_tracks: {}", e);
+                    MigrateError
+                })?;
+
+            println!("📁 Migrating genre_tracker...");
+            firebase_client.save_genre_tracker(&log_data.genre_tracker).await
+                .map_err(|e| {
+                    eprintln!("Failed to migrate genre_tracker: {}", e);
+                    MigrateError
+                })?;
+
+            println!("📁 Migrating spotify...");
+            firebase_client.save_spotify_collection(&log_data.spotify).await
+                .map_err(|e| {
+                    eprintln!("Failed to migrate spotify: {}", e);
+                    MigrateError
+                })?;
+
+            println!("📁 Migrating url_list...");
+            firebase_client.save_url_list(&log_data.url_list).await
+                .map_err(|e| {
+                    eprintln!("Failed to migrate url_list: {}", e);
+                    MigrateError
+                })?;
+
+            println!("✅ All light collections migrated successfully!");
+            return Ok(());
+        }
+
+        let final_data = {
             println!("📦 Full mode: Uploading complete file...");
             json_value
         };
