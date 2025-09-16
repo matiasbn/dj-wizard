@@ -411,7 +411,7 @@ impl DjWizardCommands {
                         return Ok(());
                     }
 
-                    // STEP 1: Get existing tracks from Firebase and mark them as migrated locally
+                    // STEP 1: Get existing tracks from Firebase and save them in bulk
                     println!("🔍 Checking existing tracks in Firebase...");
                     let existing_ids = firebase_client
                         .get_all_firebase_track_ids()
@@ -423,27 +423,25 @@ impl DjWizardCommands {
                     );
 
                     if !existing_ids.is_empty() {
-                        println!(
-                            "📝 Marking {} existing tracks as migrated locally...",
-                            existing_ids.len()
-                        );
-                        for track_id in &existing_ids {
-                            let _ = DjWizardLog::mark_track_as_migrated(track_id);
-                        }
-                        println!("✅ Marked existing tracks as migrated (save is automatic)");
+                        println!("📝 Saving {} existing track IDs to soundeo_log.json in bulk...", existing_ids.len());
+                        let _ = DjWizardLog::set_firebase_migrated_tracks(existing_ids.clone());
+                        println!("✅ Saved existing Firebase track IDs in bulk");
                     }
 
-                    // STEP 2: Reload and filter only tracks NOT in Firebase
+                    // STEP 2: Reload and filter only tracks NOT in Firebase using bulk array
                     let current_soundeo_refreshed =
                         DjWizardLog::get_soundeo().change_context(DjWizardError)?;
+                    let firebase_migrated = DjWizardLog::get_firebase_migrated_tracks()
+                        .change_context(DjWizardError)?;
+                    let firebase_migrated_set: std::collections::HashSet<String> = firebase_migrated.into_iter().collect();
                     let total_all_tracks = current_soundeo_refreshed.tracks_info.len();
 
                     let tracks_to_migrate: Vec<_> = current_soundeo_refreshed
                         .tracks_info
                         .into_iter()
                         .filter(|(track_id, track)| {
-                            // Only migrate if NOT migrated AND NOT in Firebase
-                            !track.migrated && !existing_ids.contains(track_id)
+                            // Only migrate if NOT migrated AND NOT in Firebase migrated array
+                            !track.migrated && !firebase_migrated_set.contains(track_id)
                         })
                         .collect();
 

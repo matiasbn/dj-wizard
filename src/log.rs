@@ -63,6 +63,9 @@ pub struct DjWizardLog {
     pub genre_tracker: GenreTracker,
     #[serde(default)]
     pub artist_manager: ArtistManager,
+    /// Track IDs that already exist in Firebase (for bulk filtering)
+    #[serde(default)]
+    pub firebase_migrated_tracks: Option<Vec<String>>,
 }
 
 impl DjWizardLog {
@@ -169,6 +172,23 @@ impl DjWizardLog {
         Ok(())
     }
 
+    /// Set all Firebase migrated track IDs in bulk (much faster than individual marking)
+    pub fn set_firebase_migrated_tracks(track_ids: Vec<String>) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        
+        // Add new field to store Firebase migrated track IDs
+        log.firebase_migrated_tracks = Some(track_ids);
+        log.save_log()?;
+        
+        Ok(())
+    }
+
+    /// Get Firebase migrated track IDs
+    pub fn get_firebase_migrated_tracks() -> DjWizardLogResult<Vec<String>> {
+        let log = Self::read_log()?;
+        Ok(log.firebase_migrated_tracks.unwrap_or_default())
+    }
+
     pub fn get_genre_tracker() -> DjWizardLogResult<GenreTracker> {
         let log = Self::read_log()?;
         Ok(log.genre_tracker)
@@ -196,6 +216,7 @@ impl DjWizardLog {
                 url_list: HashSet::new(),
                 genre_tracker: GenreTracker::new(),
                 artist_manager: ArtistManager::new(),
+                firebase_migrated_tracks: None,
             }
         };
         Ok(soundeo_log)
