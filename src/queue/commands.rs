@@ -281,7 +281,7 @@ impl QueueCommands {
         Ok(())
     }
 
-    pub async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
+    pub async fn resume_queue(_resume_queue_flag: bool) -> QueueResult<()> {
         let mut queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
         // Sort the queue by priority and then by order_key
