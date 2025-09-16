@@ -430,7 +430,7 @@ impl DjWizardCommands {
                     }
 
                     let tracks = non_migrated_tracks;
-                    let concurrent_limit = 8; // 5 threads with persistent status lines
+                    let concurrent_limit = 8; // 4 threads with persistent status lines
                     let max_retries = 3;
 
                     // Test Firebase connectivity first
@@ -517,46 +517,7 @@ impl DjWizardCommands {
                         Box::pin(async move {
                             let mut retry_count = 0;
 
-                            // First check if track already exists in Firebase
-                            match client.track_exists(&track_id).await {
-                                Ok(true) => {
-                                    // Track already exists, mark as migrated and skip
-                                    let current_completed =
-                                        completed.fetch_add(1, Ordering::Relaxed) + 1;
-                                    let current_failed = failed.load(Ordering::Relaxed);
-
-                                    // Move to statistics line (first line), update it
-                                    print!("\x1B[{}A", concurrent_limit + 1 - thread_id); // Move up to stats line
-                                    print!("\x1B[2K\r{}", update_stats(current_completed, current_failed, total, *start_time));
-
-                                    // Move to this thread's line, update it  
-                                    print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                    print!("\x1B[2K\rThread {}: ⏭️  {} already exists ({}/{})", 
-                                            thread_id, track_id, current_completed + current_failed, total);
-                                    print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down
-                                    io::stdout().flush().unwrap_or_default();
-
-                                    // Mark as migrated in local JSON
-                                    if let Err(e) = DjWizardLog::mark_track_as_migrated(&track_id) {
-                                        eprintln!(
-                                            "⚠️  Failed to mark track {} as migrated: {}",
-                                            track_id, e
-                                        );
-                                    }
-
-                                    return Ok(track_id);
-                                }
-                                Ok(false) => {
-                                    // Track doesn't exist, proceed with upload
-                                }
-                                Err(e) => {
-                                    // Error checking, log but proceed with upload attempt
-                                    eprintln!(
-                                        "⚠️  Failed to check if track {} exists: {}",
-                                        track_id, e
-                                    );
-                                }
-                            }
+                            // Always overwrite tracks for maximum speed
 
                             loop {
                                 match client.save_track(&track_id, &track).await {
@@ -565,15 +526,16 @@ impl DjWizardCommands {
                                             completed.fetch_add(1, Ordering::Relaxed) + 1;
                                         let current_failed = failed.load(Ordering::Relaxed);
 
-                                        // Move to statistics line (first line), update it
-                                        print!("\x1B[{}A", concurrent_limit + 1 - thread_id); // Move up to stats line
-                                        print!("\x1B[2K\r{}", update_stats(current_completed, current_failed, total, *start_time));
-
-                                        // Move to this thread's line, update it
+                                        // Update this thread's line only
                                         print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                        print!("\x1B[2K\rThread {}: ✅ {} uploaded ({}/{})", 
-                                                thread_id, track_id, current_completed + current_failed, total);
-                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down
+                                        print!(
+                                            "\x1B[2K\rThread {}: ✅ {} uploaded ({}/{})",
+                                            thread_id,
+                                            track_id,
+                                            current_completed + current_failed,
+                                            total
+                                        );
+                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down to end
                                         io::stdout().flush().unwrap_or_default();
 
                                         // Mark as migrated in local JSON
@@ -596,15 +558,17 @@ impl DjWizardCommands {
                                             let current_completed =
                                                 completed.load(Ordering::Relaxed);
 
-                                            // Move to statistics line (first line), update it
-                                            print!("\x1B[{}A", concurrent_limit + 1 - thread_id); // Move up to stats line
-                                            print!("\x1B[2K\r{}", update_stats(current_completed, current_failed, total, *start_time));
-
-                                            // Move to this thread's line, update it
+                                            // Update this thread's line only
                                             print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                            print!("\x1B[2K\rThread {}: ❌ {} failed: {} ({}/{})",
-                                                    thread_id, track_id, e, current_completed + current_failed, total);
-                                            print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down
+                                            print!(
+                                                "\x1B[2K\rThread {}: ❌ {} failed: {} ({}/{})",
+                                                thread_id,
+                                                track_id,
+                                                e,
+                                                current_completed + current_failed,
+                                                total
+                                            );
+                                            print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down to end
                                             io::stdout().flush().unwrap_or_default();
 
                                             return Err(e);
@@ -612,8 +576,10 @@ impl DjWizardCommands {
 
                                         // Move to this thread's line, update it with retry info
                                         print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                        print!("\x1B[2K\rThread {}: 🔄 {} retry {}/{} ({})", 
-                                                thread_id, track_id, retry_count, max_retries, e);
+                                        print!(
+                                            "\x1B[2K\rThread {}: 🔄 {} retry {}/{} ({})",
+                                            thread_id, track_id, retry_count, max_retries, e
+                                        );
                                         print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down
                                         io::stdout().flush().unwrap_or_default();
 
@@ -631,14 +597,43 @@ impl DjWizardCommands {
                     let mut active_futures: FuturesUnordered<TrackFuture> = FuturesUnordered::new();
                     let mut next_track_idx = 0;
 
-                    // Initialize statistics line and the 5 persistent thread status lines
+                    // Initialize statistics line and the thread status lines
                     print!("{}\n", update_stats(0, 0, total_tracks, start_time));
                     for i in 0..concurrent_limit {
                         print!("Thread {}: Waiting...\n", i);
                     }
-                    // Move cursor to end to avoid interfering with updates
-                    print!("\x1B[{};1H", concurrent_limit + 2);
                     io::stdout().flush().unwrap_or_default();
+
+                    // Spawn a task to update statistics every second
+                    let stats_completed = completed_count.clone();
+                    let stats_failed = failed_count.clone();
+                    let stats_start_time = start_time_shared.clone();
+                    let stats_update = tokio::spawn(async move {
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            let current_completed = stats_completed.load(Ordering::Relaxed);
+                            let current_failed = stats_failed.load(Ordering::Relaxed);
+
+                            // Update statistics line (first line)
+                            print!("\x1B[{}A", concurrent_limit + 1); // Move up to stats line
+                            print!(
+                                "\x1B[2K\r{}",
+                                update_stats(
+                                    current_completed,
+                                    current_failed,
+                                    total_tracks,
+                                    *stats_start_time
+                                )
+                            );
+                            print!("\x1B[{}B", concurrent_limit + 1); // Move back down
+                            io::stdout().flush().unwrap_or_default();
+
+                            // Stop when migration is complete
+                            if current_completed + current_failed >= total_tracks {
+                                break;
+                            }
+                        }
+                    });
 
                     // Start initial concurrent uploads
                     while next_track_idx < total_tracks && active_futures.len() < concurrent_limit {
@@ -732,6 +727,9 @@ impl DjWizardCommands {
                     if final_failed > 0 {
                         println!("⚠️  Some tracks failed to migrate. Check Firebase permissions and network connectivity.");
                     }
+
+                    // Cancel the statistics update task
+                    stats_update.abort();
 
                     return Ok(());
                 }
