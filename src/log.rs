@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
 use crate::artist::{ArtistCRUD, ArtistManager};
+use crate::auth::{firebase_client::FirebaseClient, google_auth::GoogleAuth};
 use crate::url_list::UrlListCRUD;
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
@@ -609,20 +610,56 @@ impl GenreTrackerCRUD for DjWizardLog {
 
 impl ArtistCRUD for DjWizardLog {
     fn get_artist_manager() -> DjWizardLogResult<ArtistManager> {
-        let log = Self::read_log()?;
-        Ok(log.artist_manager)
+        // Use tokio::task::block_in_place for compatibility with sync methods
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Get artists from Firebase
+                match firebase_client.load_artists().await {
+                    Ok(Some(artist_manager)) => Ok(artist_manager),
+                    Ok(None) => Ok(ArtistManager::default()), // Return empty manager if no data
+                    Err(_) => {
+                        // Fallback to local if Firebase fails
+                        let log = Self::read_log().map_err(|_| "Local fallback failed")?;
+                        Ok(log.artist_manager)
+                    }
+                }
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)        
     }
 
     fn save_artist_manager(manager: ArtistManager) -> DjWizardLogResult<()> {
-        let mut log = Self::read_log()?;
-        log.last_update = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .into_report()
-            .change_context(DjWizardLogError)?
-            .as_secs();
-        log.artist_manager = manager;
-        log.save_log()?;
-        Ok(())
+        // Use tokio::task::block_in_place for compatibility with sync methods
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Save to Firebase
+                match firebase_client.save_artists(&manager).await {
+                    Ok(()) => Ok(()),
+                    Err(_) => {
+                        // Fallback to local if Firebase fails
+                        let mut log = Self::read_log().map_err(|_| "Local fallback failed")?;
+                        log.last_update = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|_| "Time error")?
+                            .as_secs();
+                        log.artist_manager = manager;
+                        log.save_log().map_err(|_| "Save failed")?;
+                        Ok(())
+                    }
+                }
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 }
 
