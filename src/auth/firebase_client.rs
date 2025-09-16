@@ -1010,4 +1010,212 @@ impl FirebaseClient {
         Ok(track_ids)
     }
 
+    // Queue CRUD operations for day-to-day queue management
+
+    /// Get all queued tracks from Firebase
+    pub async fn get_queued_tracks(&self) -> AuthResult<Vec<crate::log::QueuedTrack>> {
+        let mut queued_tracks = Vec::new();
+        let mut next_page_token = None;
+
+        loop {
+            let mut url = format!(
+                "{}/users/{}/queued_tracks?pageSize=1000",
+                self.firestore_url(),
+                urlencoding::encode(&self.user_id)
+            );
+
+            if let Some(token) = &next_page_token {
+                url = format!("{}&pageToken={}", url, token);
+            }
+
+            let response = self.client
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("Failed to get queued tracks: {}", e)))?;
+
+            if !response.status().is_success() {
+                return Err(AuthError::new(&format!("Firebase returned error: {}", response.status())).into());
+            }
+
+            let data: serde_json::Value = response.json().await
+                .map_err(|e| AuthError::new(&format!("Failed to parse response: {}", e)))?;
+
+            if let Some(documents) = data["documents"].as_array() {
+                for doc in documents {
+                    if let Some(fields) = doc["fields"].as_object() {
+                        if let (Some(track_id), Some(priority), Some(order_key)) = (
+                            fields.get("track_id").and_then(|f| f["stringValue"].as_str()),
+                            fields.get("priority").and_then(|f| f["stringValue"].as_str()),
+                            fields.get("order_key").and_then(|f| f["doubleValue"].as_f64())
+                        ) {
+                            let priority = match priority {
+                                "High" => crate::log::Priority::High,
+                                "Normal" => crate::log::Priority::Normal,
+                                "Low" => crate::log::Priority::Low,
+                                _ => crate::log::Priority::Normal,
+                            };
+
+                            // Use order_key as fallback for added_at since it's missing in Firebase
+                            let added_at = fields.get("added_at")
+                                .and_then(|f| f["integerValue"].as_str())
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(order_key as u64);
+
+                            queued_tracks.push(crate::log::QueuedTrack {
+                                track_id: track_id.to_string(),
+                                priority,
+                                order_key,
+                                added_at,
+                                migrated: true,
+                            });
+                        }
+                    }
+                }
+            }
+
+            next_page_token = data["nextPageToken"].as_str().map(|s| s.to_string());
+            if next_page_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(queued_tracks)
+    }
+
+    /// Add a single track to Firebase queue
+    pub async fn add_queued_track(&self, track_id: &str, priority: crate::log::Priority) -> AuthResult<bool> {
+        // Check if track already exists
+        if self.queued_track_exists(track_id).await? {
+            return Ok(false); // Already exists
+        }
+
+        let order_key = chrono::Utc::now().timestamp_millis() as f64;
+        let added_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| AuthError::new(&format!("Time error: {}", e)))?
+            .as_secs();
+
+        let priority_str = match priority {
+            crate::log::Priority::High => "High",
+            crate::log::Priority::Normal => "Normal", 
+            crate::log::Priority::Low => "Low",
+        };
+
+        let document_data = serde_json::json!({
+            "fields": {
+                "track_id": {"stringValue": track_id},
+                "priority": {"stringValue": priority_str},
+                "order_key": {"doubleValue": order_key},
+                "added_at": {"integerValue": added_at.to_string()}
+            }
+        });
+
+        let url = format!(
+            "{}/users/{}/queued_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            track_id
+        );
+
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .json(&document_data)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to add queued track: {}", e)))?;
+
+        if response.status().is_success() {
+            Ok(true) // Added successfully
+        } else {
+            Err(AuthError::new(&format!("Failed to add queued track: {}", response.status())).into())
+        }
+    }
+
+    /// Remove a track from Firebase queue
+    pub async fn remove_queued_track(&self, track_id: &str) -> AuthResult<bool> {
+        let url = format!(
+            "{}/users/{}/queued_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            track_id
+        );
+
+        let response = self.client
+            .delete(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to remove queued track: {}", e)))?;
+
+        match response.status().as_u16() {
+            200 => Ok(true), // Successfully deleted
+            404 => Ok(false), // Track wasn't in queue anyway
+            _ => Err(AuthError::new(&format!("Failed to remove queued track: {}", response.status())).into())
+        }
+    }
+
+    /// Check if a track exists in Firebase queue
+    pub async fn queued_track_exists(&self, track_id: &str) -> AuthResult<bool> {
+        let url = format!(
+            "{}/users/{}/queued_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            track_id
+        );
+
+        let response = self.client
+            .get(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to check queued track: {}", e)))?;
+
+        Ok(response.status().is_success())
+    }
+
+    /// Update priority of an existing queued track
+    pub async fn update_queued_track_priority(&self, track_id: &str, new_priority: crate::log::Priority) -> AuthResult<bool> {
+        // Check if track exists first
+        if !self.queued_track_exists(track_id).await? {
+            return Ok(false); // Track not in queue
+        }
+
+        let priority_str = match new_priority {
+            crate::log::Priority::High => "High",
+            crate::log::Priority::Normal => "Normal", 
+            crate::log::Priority::Low => "Low",
+        };
+
+        let update_data = serde_json::json!({
+            "fields": {
+                "priority": {"stringValue": priority_str}
+            }
+        });
+
+        let url = format!(
+            "{}/users/{}/queued_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            track_id
+        );
+
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "priority")])
+            .json(&update_data)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to update queued track priority: {}", e)))?;
+
+        if response.status().is_success() {
+            Ok(true) // Updated successfully
+        } else {
+            Err(AuthError::new(&format!("Failed to update queued track priority: {}", response.status())).into())
+        }
+    }
+
 }

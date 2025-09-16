@@ -74,8 +74,19 @@ pub struct DjWizardLog {
 
 impl DjWizardLog {
     pub fn get_queued_tracks() -> DjWizardLogResult<Vec<QueuedTrack>> {
-        let log = Self::read_log()?;
-        Ok(log.queued_tracks)
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Get queued tracks from Firebase
+                firebase_client.get_queued_tracks().await.map_err(|_| "Failed to get queued tracks from Firebase")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)    
     }
 
     pub fn get_available_tracks() -> DjWizardLogResult<HashSet<String>> {
@@ -269,94 +280,62 @@ impl DjWizardLog {
     }
 
     pub fn add_queued_track(track_id: String, priority: Priority) -> DjWizardLogResult<bool> {
-        let mut log = Self::read_log()?;
-        log.last_update = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .into_report()
-            .change_context(DjWizardLogError)?
-            .as_secs();
-
-        if log.queued_tracks.iter().any(|t| t.track_id == track_id) {
-            return Ok(false);
-        }
-
-        let max_order_key_in_group = log
-            .queued_tracks
-            .iter()
-            .filter(|t| t.priority == priority)
-            .map(|t| t.order_key)
-            .fold(f64::NEG_INFINITY, f64::max);
-
-        let new_track = QueuedTrack {
-            track_id,
-            priority,
-            order_key: if max_order_key_in_group.is_finite() {
-                max_order_key_in_group + 1.0
-            } else {
-                1.0
-            },
-            added_at: log.last_update,
-            migrated: false,
-        };
-        log.queued_tracks.push(new_track);
-        log.save_log()?;
-        Ok(true)
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Add track to Firebase queue
+                firebase_client.add_queued_track(&track_id, priority).await.map_err(|_| "Failed to add track to Firebase queue")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)    
     }
 
     pub fn promote_tracks_to_top(track_ids_to_promote: &[String]) -> DjWizardLogResult<()> {
-        let mut log = Self::read_log()?;
-
-        // 1. Find the lowest (most priority) order_key among existing High priority tracks.
-        let min_high_priority_key = log
-            .queued_tracks
-            .iter()
-            .filter(|t| t.priority == Priority::High)
-            .map(|t| t.order_key)
-            .fold(f64::INFINITY, f64::min);
-
-        // 2. Determine the starting point for the new order_keys.
-        // If no 'High' tracks exist, we can start from 0. Otherwise, start below the current minimum.
-        let mut next_order_key = if min_high_priority_key.is_finite() {
-            min_high_priority_key - 1.0
-        } else {
-            0.0
-        };
-
-        // 3. Update the selected tracks.
-        for track in log.queued_tracks.iter_mut() {
-            if track_ids_to_promote.contains(&track.track_id) {
-                track.priority = Priority::High;
-                track.order_key = next_order_key;
-                next_order_key -= 1.0; // Each subsequent promoted track gets an even lower key.
-            }
-        }
-
-        log.save_log()?;
-        println!(
-            "{}",
-            format!(
-                "{} tracks have been moved to the top of the queue.",
-                track_ids_to_promote.len()
-            )
-            .green()
-        );
-        Ok(())
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // For each track to promote, update its priority to High
+                for track_id in track_ids_to_promote {
+                    let _ = firebase_client.update_queued_track_priority(track_id, Priority::High).await;
+                }
+                
+                println!(
+                    "{}",
+                    format!(
+                        "{} tracks have been moved to high priority.",
+                        track_ids_to_promote.len()
+                    ).green()
+                );
+                Ok(())
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)        
     }
 
     pub fn remove_queued_track(track_id: String) -> DjWizardLogResult<bool> {
-        let mut log = Self::read_log()?;
-        log.last_update = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .into_report()
-            .change_context(DjWizardLogError)?
-            .as_secs();
-        let initial_len = log.queued_tracks.len();
-        log.queued_tracks.retain(|t| t.track_id != track_id);
-        let was_removed = log.queued_tracks.len() < initial_len;
-        if was_removed {
-            log.save_log()?;
-        }
-        Ok(was_removed)
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Remove track from Firebase queue
+                firebase_client.remove_queued_track(&track_id).await.map_err(|_| "Failed to remove track from Firebase queue")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)    
     }
 
     pub fn add_available_track(track_id: String) -> DjWizardLogResult<bool> {
