@@ -664,7 +664,7 @@ impl FirebaseClient {
             return Err(AuthError::new(&format!("Firestore batch write error: {}", error_text)).into());
         }
 
-        // Mark all tracks in the batch as migrated
+        // Mark all tracks in the batch as migrated (save is automatic)
         for (track_id, _) in tracks {
             let _ = crate::log::DjWizardLog::mark_track_as_migrated(track_id);
         }
@@ -676,7 +676,33 @@ impl FirebaseClient {
     pub async fn migrate_queue_to_subcollections(&mut self, queued_tracks: &[crate::log::QueuedTrack]) -> AuthResult<()> {
         self.ensure_valid_token().await?;
         
-        let total = queued_tracks.len();
+        // STEP 1: Get existing queued tracks from Firebase and mark them as migrated locally
+        println!("🔍 Checking existing queued tracks in Firebase...");
+        let existing_ids = self.get_all_firebase_queue_ids().await.unwrap_or_default();
+        println!("📊 Found {} existing queued tracks in Firebase", existing_ids.len());
+        
+        if !existing_ids.is_empty() {
+            println!("📝 Marking {} existing queued tracks as migrated locally...", existing_ids.len());
+            for track_id in &existing_ids {
+                let _ = crate::log::DjWizardLog::mark_queued_track_as_migrated(track_id);
+            }
+            println!("✅ Marked existing queued tracks as migrated (save is automatic)");
+        }
+        
+        // STEP 2: Filter only tracks NOT in Firebase
+        let tracks_to_migrate: Vec<&crate::log::QueuedTrack> = queued_tracks
+            .iter()
+            .filter(|track| !existing_ids.contains(&track.track_id))
+            .collect();
+        
+        if tracks_to_migrate.is_empty() {
+            println!("✅ All queued tracks already exist in Firebase");
+            return Ok(());
+        }
+        
+        println!("📋 Will migrate {} new queued tracks to Firebase", tracks_to_migrate.len());
+        
+        let total = tracks_to_migrate.len();
         let start_time = std::time::Instant::now();
         let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -693,8 +719,9 @@ impl FirebaseClient {
         // Share start time for rate calculation
         let start_time = std::sync::Arc::new(start_time);
         
-        // Convert to shared queue
-        let tracks_queue = std::sync::Arc::new(tokio::sync::Mutex::new(queued_tracks.to_vec()));
+        // Convert to shared queue  
+        let tracks_to_migrate_owned: Vec<crate::log::QueuedTrack> = tracks_to_migrate.into_iter().cloned().collect();
+        let tracks_queue = std::sync::Arc::new(tokio::sync::Mutex::new(tracks_to_migrate_owned));
         
         // Spawn 2 worker threads
         let mut tasks = Vec::new();
@@ -869,6 +896,120 @@ impl FirebaseClient {
             print!("\x1B[{}B", concurrent_batches);
             std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
         }
+    }
+
+    /// Get all track IDs from Firebase with pagination
+    pub async fn get_all_firebase_track_ids(&self) -> AuthResult<Vec<String>> {
+        let mut track_ids = Vec::new();
+        let mut page_token: Option<String> = None;
+        
+        loop {
+            let mut url = format!(
+                "{}/users/{}/soundeo_tracks?pageSize=1000",
+                self.firestore_url(), self.user_id
+            );
+            
+            if let Some(token) = &page_token {
+                url.push_str(&format!("&pageToken={}", token));
+            }
+
+            let response = self.client
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("HTTP request failed: {}", e)))?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_default();
+                return Err(AuthError::new(&format!("Firebase get error: {}", error_text)).into());
+            }
+
+            let response_text = response.text().await
+                .map_err(|e| AuthError::new(&format!("Failed to read response: {}", e)))?;
+
+            let json: serde_json::Value = serde_json::from_str(&response_text)
+                .map_err(|e| AuthError::new(&format!("Failed to parse JSON: {}", e)))?;
+
+            // Process documents from this page
+            if let Some(documents) = json.get("documents").and_then(|d| d.as_array()) {
+                for doc in documents {
+                    if let Some(name) = doc.get("name").and_then(|n| n.as_str()) {
+                        // Extract track ID from document path like "projects/.../documents/users/USER/soundeo_tracks/TRACK_ID"
+                        if let Some(track_id) = name.split('/').last() {
+                            track_ids.push(track_id.to_string());
+                        }
+                    }
+                }
+            }
+            
+            // Check for next page token
+            page_token = json.get("nextPageToken").and_then(|t| t.as_str()).map(|s| s.to_string());
+            
+            // If no next page token, we're done
+            if page_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(track_ids)
+    }
+
+    /// Get all queued track IDs from Firebase with pagination
+    pub async fn get_all_firebase_queue_ids(&self) -> AuthResult<Vec<String>> {
+        let mut track_ids = Vec::new();
+        let mut page_token: Option<String> = None;
+        
+        loop {
+            let mut url = format!(
+                "{}/users/{}/queued_tracks?pageSize=1000",
+                self.firestore_url(), self.user_id
+            );
+            
+            if let Some(token) = &page_token {
+                url.push_str(&format!("&pageToken={}", token));
+            }
+
+            let response = self.client
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("HTTP request failed: {}", e)))?;
+
+            if !response.status().is_success() {
+                let error_text = response.text().await.unwrap_or_default();
+                return Err(AuthError::new(&format!("Firebase get error: {}", error_text)).into());
+            }
+
+            let response_text = response.text().await
+                .map_err(|e| AuthError::new(&format!("Failed to read response: {}", e)))?;
+
+            let json: serde_json::Value = serde_json::from_str(&response_text)
+                .map_err(|e| AuthError::new(&format!("Failed to parse JSON: {}", e)))?;
+
+            // Process documents from this page
+            if let Some(documents) = json.get("documents").and_then(|d| d.as_array()) {
+                for doc in documents {
+                    if let Some(name) = doc.get("name").and_then(|n| n.as_str()) {
+                        // Extract track ID from document path
+                        if let Some(track_id) = name.split('/').last() {
+                            track_ids.push(track_id.to_string());
+                        }
+                    }
+                }
+            }
+            
+            // Check for next page token
+            page_token = json.get("nextPageToken").and_then(|t| t.as_str()).map(|s| s.to_string());
+            
+            // If no next page token, we're done
+            if page_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(track_ids)
     }
 
 }

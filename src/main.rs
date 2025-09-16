@@ -411,29 +411,58 @@ impl DjWizardCommands {
                         return Ok(());
                     }
 
-                    // Filter only non-migrated tracks
-                    let total_all_tracks = current_soundeo.tracks_info.len();
-                    let non_migrated_tracks: Vec<_> = current_soundeo
+                    // STEP 1: Get existing tracks from Firebase and mark them as migrated locally
+                    println!("🔍 Checking existing tracks in Firebase...");
+                    let existing_ids = firebase_client
+                        .get_all_firebase_track_ids()
+                        .await
+                        .unwrap_or_default();
+                    println!(
+                        "📊 Found {} existing tracks in Firebase",
+                        existing_ids.len()
+                    );
+
+                    if !existing_ids.is_empty() {
+                        println!(
+                            "📝 Marking {} existing tracks as migrated locally...",
+                            existing_ids.len()
+                        );
+                        for track_id in &existing_ids {
+                            let _ = DjWizardLog::mark_track_as_migrated(track_id);
+                        }
+                        println!("✅ Marked existing tracks as migrated (save is automatic)");
+                    }
+
+                    // STEP 2: Reload and filter only tracks NOT in Firebase
+                    let current_soundeo_refreshed =
+                        DjWizardLog::get_soundeo().change_context(DjWizardError)?;
+                    let total_all_tracks = current_soundeo_refreshed.tracks_info.len();
+
+                    let tracks_to_migrate: Vec<_> = current_soundeo_refreshed
                         .tracks_info
                         .into_iter()
-                        .filter(|(_, track)| !track.migrated)
+                        .filter(|(track_id, track)| {
+                            // Only migrate if NOT migrated AND NOT in Firebase
+                            !track.migrated && !existing_ids.contains(track_id)
+                        })
                         .collect();
 
-                    let total_tracks = non_migrated_tracks.len();
+                    let total_tracks = tracks_to_migrate.len();
+                    let already_migrated = total_all_tracks - total_tracks;
 
                     println!(
                         "📊 Found {} total tracks, {} already migrated, {} pending migration",
-                        total_all_tracks,
-                        total_all_tracks - total_tracks,
-                        total_tracks
+                        total_all_tracks, already_migrated, total_tracks
                     );
 
                     if total_tracks == 0 {
-                        println!("✅ All tracks already migrated!");
+                        println!(
+                            "✅ All tracks already exist in Firebase or are marked as migrated!"
+                        );
                         return Ok(());
                     }
 
-                    let tracks = non_migrated_tracks;
+                    let tracks = tracks_to_migrate;
                     let batch_size = 20; // Conservative batch size for reliability
                     let concurrent_batches = 5; // 3 concurrent batch threads
                     let max_retries = 3;
@@ -579,7 +608,8 @@ impl DjWizardCommands {
                                         Ok(_) => {
                                             // Mark all tracks in batch as migrated
                                             for (track_id, _) in &batch_tracks {
-                                                let _ = DjWizardLog::mark_track_as_migrated(track_id);
+                                                let _ =
+                                                    DjWizardLog::mark_track_as_migrated(track_id);
                                             }
 
                                             let current_completed = completed
@@ -677,7 +707,9 @@ impl DjWizardCommands {
                                             Ok(_) => {
                                                 // Mark all tracks in batch as migrated
                                                 for (track_id, _) in &batch_tracks {
-                                                    let _ = DjWizardLog::mark_track_as_migrated(track_id);
+                                                    let _ = DjWizardLog::mark_track_as_migrated(
+                                                        track_id,
+                                                    );
                                                 }
 
                                                 let current_completed = completed.fetch_add(
@@ -813,27 +845,33 @@ impl DjWizardCommands {
 
                     // Read current queue from DjWizardLog
                     use crate::log::DjWizardLog;
-                    let all_queued_tracks = DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
-                    
+                    let all_queued_tracks =
+                        DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
+
                     // Filter only non-migrated tracks
                     let queued_tracks: Vec<_> = all_queued_tracks
                         .into_iter()
                         .filter(|track| !track.migrated)
                         .collect();
-                    
+
                     if queued_tracks.is_empty() {
-                        println!("ℹ️  No pending queued tracks found to migrate (all already migrated)");
+                        println!(
+                            "ℹ️  No pending queued tracks found to migrate (all already migrated)"
+                        );
                         return Ok(());
                     }
-                    
-                    println!("📊 Found {} pending queued tracks to migrate", queued_tracks.len());
-                    
+
+                    println!(
+                        "📊 Found {} pending queued tracks to migrate",
+                        queued_tracks.len()
+                    );
+
                     // Migrate to priority-based structure
                     firebase_client
                         .migrate_queue_to_subcollections(&queued_tracks)
                         .await
                         .change_context(DjWizardError)?;
-                    
+
                     println!("🎉 Queue successfully migrated to priority-based subcollections!");
                     return Ok(());
                 }
