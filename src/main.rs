@@ -102,6 +102,9 @@ enum DjWizardCommands {
         /// Migrate all remaining fields (tracks_info, etc.)
         #[clap(long)]
         remaining: bool,
+        /// Migrate tracks as individual documents for O(1) access (super fast)
+        #[clap(long)]
+        individual_tracks: bool,
     },
 }
 
@@ -259,6 +262,7 @@ impl DjWizardCommands {
                 queued_tracks,
                 soundeo,
                 remaining,
+                individual_tracks,
             } => {
                 use crate::auth::firebase_client::FirebaseClient;
                 use crate::auth::google_auth::GoogleAuth;
@@ -433,35 +437,52 @@ impl DjWizardCommands {
                         }
 
                         // Migrate tracks_info with sliding window parallel processing
-                        let batch_size = 200;
+                        let batch_size = 100;
                         let total_batches = (tracks.len() + batch_size - 1) / batch_size;
-                        let concurrent_limit = 3;
+                        let concurrent_limit = 5;
 
                         println!("🚀 Starting sliding window parallel migration with {} concurrent slots", concurrent_limit);
 
                         use futures_util::stream::{FuturesUnordered, StreamExt};
-                        use std::pin::Pin;
                         use std::future::Future;
+                        use std::pin::Pin;
                         use std::sync::Arc;
-                        
-                        type BatchFuture = Pin<Box<dyn Future<Output = Result<(usize, serde_json::Value), error_stack::Report<crate::auth::AuthError>>> + Send>>;
-                        
-                        let mut active_futures: FuturesUnordered<BatchFuture> = FuturesUnordered::new();
+
+                        type BatchFuture = Pin<
+                            Box<
+                                dyn Future<
+                                        Output = Result<
+                                            (usize, serde_json::Value),
+                                            error_stack::Report<crate::auth::AuthError>,
+                                        >,
+                                    > + Send,
+                            >,
+                        >;
+
+                        let mut active_futures: FuturesUnordered<BatchFuture> =
+                            FuturesUnordered::new();
                         let mut next_batch_idx = 0;
                         let mut completed_batches = 0;
-                        
+
                         // Wrap firebase_client in Arc for sharing across futures
                         let firebase_client = Arc::new(firebase_client);
 
                         // Helper function to create a batch upload future
-                        let create_batch_future = |batch_num: usize, batch_doc: serde_json::Value, chunk_len: usize, client: Arc<FirebaseClient>| -> BatchFuture {
+                        let create_batch_future = |batch_num: usize,
+                                                   batch_doc: serde_json::Value,
+                                                   chunk_len: usize,
+                                                   client: Arc<FirebaseClient>|
+                         -> BatchFuture {
                             Box::pin(async move {
-                                println!("📤 Starting batch {} ({} tracks)...", batch_num, chunk_len);
-                                
+                                println!(
+                                    "📤 Starting batch {} ({} tracks)...",
+                                    batch_num, chunk_len
+                                );
+
                                 let result = client
                                     .set_document("dj_wizard_data", "soundeo_log", &batch_doc)
                                     .await;
-                                
+
                                 match result {
                                     Ok(_) => {
                                         println!("✅ Batch {} completed successfully", batch_num);
@@ -474,17 +495,23 @@ impl DjWizardCommands {
                                 }
                             })
                         };
-                        
+
                         // Helper function to prepare batch data
-                        let prepare_batch_data = |batch_idx: usize, existing_doc: &serde_json::Value| -> DjWizardResult<(usize, serde_json::Value, usize)> {
+                        let prepare_batch_data = |batch_idx: usize,
+                                                  existing_doc: &serde_json::Value|
+                         -> DjWizardResult<(
+                            usize,
+                            serde_json::Value,
+                            usize,
+                        )> {
                             let chunk_start = batch_idx * batch_size;
                             let chunk_end = ((batch_idx + 1) * batch_size).min(tracks.len());
                             let chunk = &tracks[chunk_start..chunk_end];
-                            
+
                             // Clone and build the batch document
                             let mut batch_doc = existing_doc.clone();
                             let batch_num = batch_idx + 1;
-                            
+
                             if let serde_json::Value::Object(ref mut doc_map) = batch_doc {
                                 if let Some(serde_json::Value::Object(ref mut soundeo_map)) =
                                     doc_map.get_mut("soundeo")
@@ -502,15 +529,22 @@ impl DjWizardCommands {
                                     }
                                 }
                             }
-                            
+
                             Ok((batch_num, batch_doc, chunk.len()))
                         };
 
                         // Start initial batch of concurrent uploads
-                        while next_batch_idx < total_batches && active_futures.len() < concurrent_limit {
+                        while next_batch_idx < total_batches
+                            && active_futures.len() < concurrent_limit
+                        {
                             match prepare_batch_data(next_batch_idx, &existing_doc) {
                                 Ok((batch_num, batch_doc, chunk_len)) => {
-                                    let future = create_batch_future(batch_num, batch_doc, chunk_len, firebase_client.clone());
+                                    let future = create_batch_future(
+                                        batch_num,
+                                        batch_doc,
+                                        chunk_len,
+                                        firebase_client.clone(),
+                                    );
                                     active_futures.push(future);
                                     next_batch_idx += 1;
                                 }
@@ -524,21 +558,26 @@ impl DjWizardCommands {
                                 match result {
                                     Ok((batch_num, batch_doc)) => {
                                         completed_batches += 1;
-                                        
+
                                         // Update our local state with the successful batch
                                         existing_doc = batch_doc;
-                                        
+
                                         println!(
                                             "🎯 Progress: {}/{} batches completed",
-                                            completed_batches,
-                                            total_batches
+                                            completed_batches, total_batches
                                         );
-                                        
+
                                         // Immediately start the next batch if available
                                         if next_batch_idx < total_batches {
-                                            match prepare_batch_data(next_batch_idx, &existing_doc) {
+                                            match prepare_batch_data(next_batch_idx, &existing_doc)
+                                            {
                                                 Ok((new_batch_num, new_batch_doc, chunk_len)) => {
-                                                    let future = create_batch_future(new_batch_num, new_batch_doc, chunk_len, firebase_client.clone());
+                                                    let future = create_batch_future(
+                                                        new_batch_num,
+                                                        new_batch_doc,
+                                                        chunk_len,
+                                                        firebase_client.clone(),
+                                                    );
                                                     active_futures.push(future);
                                                     next_batch_idx += 1;
                                                 }
@@ -711,6 +750,7 @@ impl DjWizardCommands {
                 queued_tracks,
                 soundeo,
                 remaining,
+                individual_tracks,
             } => {
                 let mut cmd = "dj-wizard migrate".to_string();
                 if let Some(log_path) = soundeo_log {
