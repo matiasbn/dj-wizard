@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use reqwest::StatusCode;
 
 use super::{AuthError, AuthResult, AuthToken};
 use crate::artist::{Artist, ArtistManager};
@@ -294,6 +295,243 @@ impl FirebaseClient {
         }
     }
 
+    // Soundeo, Spotify, UrlList and Genre Tracker CRUD operations
+    
+    /// Get soundeo data from soundeo_tracks collection
+    pub async fn get_soundeo(&self) -> Result<crate::soundeo::Soundeo, Box<dyn std::error::Error>> {
+        // For now, return empty Soundeo since individual tracks should be accessed separately
+        // This maintains backward compatibility while using the new structure
+        Ok(crate::soundeo::Soundeo::new())
+    }
+    
+    /// Save soundeo data - this is a no-op since we save individual tracks to soundeo_tracks collection
+    pub async fn save_soundeo(&self, _soundeo: &crate::soundeo::Soundeo) -> Result<(), Box<dyn std::error::Error>> {
+        // No-op: individual tracks are saved to soundeo_tracks collection via create_soundeo_track
+        Ok(())
+    }
+
+    /// Get individual soundeo track from soundeo_tracks collection
+    pub async fn get_soundeo_track(&self, track_id: &str) -> Result<Option<crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/users/{}/soundeo_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            urlencoding::encode(track_id)
+        );
+        
+        let response = self.client.get(&url).bearer_auth(&self.access_token).send().await?;
+        
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        
+        let firestore_response: Value = response.json().await?;
+        
+        if let Some(fields) = firestore_response.get("fields") {
+            let track_value = self.convert_firestore_fields_to_value(fields);
+            let track: crate::soundeo::track::SoundeoTrack = serde_json::from_value(track_value)?;
+            return Ok(Some(track));
+        }
+        
+        Ok(None)
+    }
+
+    /// Save individual soundeo track to soundeo_tracks collection
+    pub async fn save_soundeo_track(&self, track: &crate::soundeo::track::SoundeoTrack) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/users/{}/soundeo_tracks/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            urlencoding::encode(&track.id)
+        );
+        
+        let track_value = serde_json::to_value(track)?;
+        
+        let firestore_doc = serde_json::json!({
+            "fields": self.convert_to_firestore_value(&track_value).get("mapValue").unwrap().get("fields").unwrap()
+        });
+        
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .json(&firestore_doc)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to save soundeo track: {}", error_text).into());
+        }
+        
+        Ok(())
+    }
+
+    /// Get spotify data from dj_wizard_data
+    pub async fn get_spotify(&self) -> Result<crate::spotify::Spotify, Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let response = self.client.get(&url).bearer_auth(&self.access_token).send().await?;
+        
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(crate::spotify::Spotify::new());
+        }
+        
+        let firestore_response: Value = response.json().await?;
+        
+        if let Some(fields) = firestore_response.get("fields") {
+            if let Some(spotify_field) = fields.get("spotify") {
+                if let Some(map_val) = spotify_field.get("mapValue") {
+                    if let Some(spotify_fields) = map_val.get("fields") {
+                        let spotify_value = self.convert_firestore_fields_to_value(spotify_fields);
+                        return Ok(serde_json::from_value(spotify_value)?);
+                    }
+                }
+            }
+        }
+        
+        Ok(crate::spotify::Spotify::new())
+    }
+    
+    /// Save spotify data to dj_wizard_data
+    pub async fn save_spotify(&self, spotify: &crate::spotify::Spotify) -> Result<(), Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let spotify_value = serde_json::to_value(spotify)?;
+        
+        let firestore_doc = serde_json::json!({
+            "fields": {
+                "spotify": self.convert_to_firestore_value(&spotify_value)
+            }
+        });
+        
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "spotify")])
+            .json(&firestore_doc)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to save spotify: {}", error_text).into());
+        }
+        
+        Ok(())
+    }
+
+    /// Get url_list data from dj_wizard_data
+    pub async fn get_url_list(&self) -> Result<std::collections::HashSet<String>, Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let response = self.client.get(&url).bearer_auth(&self.access_token).send().await?;
+        
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(std::collections::HashSet::new());
+        }
+        
+        let firestore_response: Value = response.json().await?;
+        
+        if let Some(fields) = firestore_response.get("fields") {
+            if let Some(url_list_field) = fields.get("url_list") {
+                if let Some(array_val) = url_list_field.get("arrayValue") {
+                    if let Some(values) = array_val.get("values") {
+                        if let Value::Array(arr) = values {
+                            let mut url_set = std::collections::HashSet::new();
+                            for item in arr {
+                                if let Some(string_val) = item.get("stringValue") {
+                                    if let Some(url) = string_val.as_str() {
+                                        url_set.insert(url.to_string());
+                                    }
+                                }
+                            }
+                            return Ok(url_set);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(std::collections::HashSet::new())
+    }
+    
+    /// Save url_list data to dj_wizard_data
+    pub async fn save_url_list(&self, url_list: &std::collections::HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let url_vec: Vec<String> = url_list.iter().cloned().collect();
+        let url_list_value = serde_json::to_value(url_vec)?;
+        
+        let firestore_doc = serde_json::json!({
+            "fields": {
+                "url_list": self.convert_to_firestore_value(&url_list_value)
+            }
+        });
+        
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "url_list")])
+            .json(&firestore_doc)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to save url_list: {}", error_text).into());
+        }
+        
+        Ok(())
+    }
+
+    /// Get genre_tracker data from dj_wizard_data
+    pub async fn get_genre_tracker(&self) -> Result<crate::genre_tracker::GenreTracker, Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let response = self.client.get(&url).bearer_auth(&self.access_token).send().await?;
+        
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(crate::genre_tracker::GenreTracker::new());
+        }
+        
+        let firestore_response: Value = response.json().await?;
+        
+        if let Some(fields) = firestore_response.get("fields") {
+            if let Some(genre_tracker_field) = fields.get("genre_tracker") {
+                if let Some(map_val) = genre_tracker_field.get("mapValue") {
+                    if let Some(genre_tracker_fields) = map_val.get("fields") {
+                        let genre_tracker_value = self.convert_firestore_fields_to_value(genre_tracker_fields);
+                        return Ok(serde_json::from_value(genre_tracker_value)?);
+                    }
+                }
+            }
+        }
+        
+        Ok(crate::genre_tracker::GenreTracker::new())
+    }
+    
+    /// Save genre_tracker data to dj_wizard_data
+    pub async fn save_genre_tracker(&self, genre_tracker: &crate::genre_tracker::GenreTracker) -> Result<(), Box<dyn std::error::Error>> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+        let genre_tracker_value = serde_json::to_value(genre_tracker)?;
+        
+        let firestore_doc = serde_json::json!({
+            "fields": {
+                "genre_tracker": self.convert_to_firestore_value(&genre_tracker_value)
+            }
+        });
+        
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "genre_tracker")])
+            .json(&firestore_doc)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to save genre_tracker: {}", error_text).into());
+        }
+        
+        Ok(())
+    }
+
     // Artist CRUD operations
 
     /// Save artist manager to dj_wizard_data
@@ -341,43 +579,6 @@ impl FirebaseClient {
             }
             None => Ok(None),
         }
-    }
-
-    // Genre Tracker CRUD operations
-
-    /// Save genre tracker to Firestore
-    pub async fn save_genre_tracker(&self, genre_tracker: &GenreTracker) -> AuthResult<()> {
-        let data = serde_json::to_value(genre_tracker)
-            .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
-
-        // Save to dj_wizard_data document as genre_tracker field
-        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
-
-        let firestore_doc = serde_json::json!({
-            "fields": {
-                "genre_tracker": self.convert_to_firestore_value(&data)
-            }
-        });
-
-        let response = self
-            .client
-            .patch(&url)
-            .bearer_auth(&self.access_token)
-            .query(&[("updateMask.fieldPaths", "genre_tracker")])
-            .json(&firestore_doc)
-            .send()
-            .await
-            .map_err(|e| AuthError::new(&format!("Failed to save genre tracker: {}", e)))?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-            return Err(
-                AuthError::new(&format!("Failed to save genre tracker: {}", error_text)).into(),
-            );
-        }
-
-        println!("✅ Genre tracker data saved to dj_wizard_data successfully!");
-        Ok(())
     }
 
     /// Add or update a specific tracked genre
@@ -495,7 +696,7 @@ impl FirebaseClient {
         })?;
 
         // Save to Firebase
-        self.save_genre_tracker(&genre_tracker).await?;
+        self.save_genre_tracker(&genre_tracker).await.map_err(|e| AuthError::new(&format!("Failed to save genre tracker: {}", e)))?;
 
         println!(
             "✅ Successfully migrated {} tracked genres and {} available genres to Firebase",
@@ -1508,8 +1709,8 @@ impl FirebaseClient {
         Ok(())
     }
 
-    /// Save url_list collection to Firebase
-    pub async fn save_url_list(
+    /// Save url_list collection to Firebase (old method for migration)
+    pub async fn migrate_save_url_list(
         &self,
         url_list: &std::collections::HashSet<String>,
     ) -> AuthResult<()> {
@@ -1567,7 +1768,7 @@ impl FirebaseClient {
 
         let response = self
             .client
-            .post(&url)
+            .patch(&url)
             .bearer_auth(&self.access_token)
             .json(&empty_doc)
             .send()
