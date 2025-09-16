@@ -43,24 +43,24 @@ impl MigrateCli {
         use crate::auth::firebase_client::FirebaseClient;
         use crate::auth::google_auth::GoogleAuth;
 
-        // Try to load existing token, refresh if needed
-        let auth_token = match GoogleAuth::load_token() {
-            Ok(token) => {
-                // Check if token is about to expire (within 5 minutes)
-                let expires_soon = token.expires_at - chrono::Duration::minutes(5);
-                if chrono::Utc::now() > expires_soon {
-                    println!("🔄 Token expires soon, refreshing authentication...");
-                    GoogleAuth::new()
-                        .login()
-                        .await
-                        .change_context(MigrateError)?
-                } else {
-                    token
-                }
-            }
+        // Load authentication token, with automatic login if needed
+        let auth_token = match GoogleAuth::load_token().await {
+            Ok(token) => token,
             Err(_) => {
-                println!("❌ No valid authentication found. Please run 'dj-wizard auth' first.");
-                return Err(MigrateError).into_report();
+                println!("🔐 Authenticating with Google...");
+                
+                // Attempt automatic login
+                let google_auth = GoogleAuth::new();
+                match google_auth.login().await {
+                    Ok(token) => {
+                        println!("✅ Ready to migrate!");
+                        token
+                    }
+                    Err(_) => {
+                        println!("❌ Authentication failed.");
+                        return Err(MigrateError).into_report();
+                    }
+                }
             }
         };
 

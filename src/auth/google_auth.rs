@@ -94,7 +94,7 @@ impl GoogleAuth {
     }
 
     pub async fn login(&self) -> AuthResult<AuthToken> {
-        println!("{}", "🔐 Initiating Google authentication...".cyan());
+        println!("🔐 Opening browser for Google authentication...");
 
         // Create OAuth2 client - reading client secret from environment variable
         // TODO: Fix this properly - Google shouldn't require client secret for Desktop apps with PKCE
@@ -136,11 +136,6 @@ impl GoogleAuth {
             .set_pkce_challenge(pkce_challenge)
             .url();
 
-        println!("Opening browser for authentication...");
-        println!(
-            "If browser doesn't open, visit: {}",
-            auth_url.to_string().blue()
-        );
 
         // Open browser
         if webbrowser::open(auth_url.as_str()).is_err() {
@@ -160,7 +155,6 @@ impl GoogleAuth {
         }
 
         // Exchange code for token using PKCE verifier
-        println!("Exchanging authorization code for access token...");
         let token_response = client
             .exchange_code(AuthorizationCode::new(code))
             .set_pkce_verifier(pkce_verifier)
@@ -170,17 +164,13 @@ impl GoogleAuth {
             .attach_printable("Token exchange failed")
             .change_context(AuthError::new("Token exchange error"))?;
 
-        println!("✅ Token exchange successful!");
 
         // Get user info
         let user_info = self
             .get_user_info(token_response.access_token().secret())
             .await?;
 
-        println!(
-            "✅ Successfully authenticated as: {}",
-            user_info.email.green()
-        );
+        println!("✅ Authenticated as: {}", user_info.email.green());
 
         // Create auth token
         let auth_token = AuthToken {
@@ -201,6 +191,11 @@ impl GoogleAuth {
 
         // Save token locally
         self.save_token(&auth_token)?;
+        
+        // Also save refresh token in User config for easier access
+        if let Some(ref refresh_token) = auth_token.refresh_token {
+            Self::save_refresh_token_to_user_config(refresh_token)?;
+        }
 
         Ok(auth_token)
     }
@@ -211,7 +206,6 @@ impl GoogleAuth {
         let server = Server::http("localhost:8080")
             .map_err(|e| AuthError::new(&format!("Failed to start server: {}", e)))?;
 
-        println!("Waiting for authentication callback on http://localhost:8080/callback");
 
         let timeout = Duration::from_secs(AppConfig::OAUTH_CALLBACK_TIMEOUT_SECS);
         let start = std::time::Instant::now();
@@ -225,12 +219,10 @@ impl GoogleAuth {
             // Try to receive request with timeout
             if let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(100)) {
                 let url = request.url();
-                println!("Received request: {}", url);
 
                 if url.starts_with("/callback") {
                     // Parse query parameters
                     if let Some(query) = url.split('?').nth(1) {
-                        println!("Parsing query: {}", query);
                         let mut code = None;
                         let mut state = None;
 
@@ -244,7 +236,6 @@ impl GoogleAuth {
                                                 .unwrap_or_default()
                                                 .to_string(),
                                         );
-                                        println!("Found code: {}", code.as_ref().unwrap());
                                     }
                                     "state" => {
                                         state = Some(
@@ -252,7 +243,6 @@ impl GoogleAuth {
                                                 .unwrap_or_default()
                                                 .to_string(),
                                         );
-                                        println!("Found state: {}", state.as_ref().unwrap());
                                     }
                                     _ => {}
                                 }
@@ -260,7 +250,6 @@ impl GoogleAuth {
                         }
 
                         if let Some(auth_code) = code {
-                            println!("Sending success response and returning auth code");
                             // Send success response
                             let html = r#"
                                 <html>
@@ -364,7 +353,7 @@ impl GoogleAuth {
         Ok(())
     }
 
-    pub fn load_token() -> AuthResult<AuthToken> {
+    pub async fn load_token() -> AuthResult<AuthToken> {
         let home_dir = dirs::home_dir()
             .ok_or(AuthError::new("Could not find home directory"))
             .into_report()?;
@@ -377,12 +366,38 @@ impl GoogleAuth {
             .into_report()
             .change_context(AuthError::new("Request error"))?;
 
-        // Check if token is expired
+        // Check if token is expired and try to refresh it
         if token.expires_at < chrono::Utc::now() {
-            println!("{}", "Token expired, please login again".yellow());
-            return Err(AuthError::new("Token expired")).into_report();
+            if let Some(ref refresh_token) = token.refresh_token {
+                println!("🔄 Refreshing expired token...");
+                return Self::refresh_token(refresh_token).await;
+            } else {
+                return Err(AuthError::new("Token expired and no refresh token available")).into_report();
+            }
         }
 
         Ok(token)
+    }
+
+    /// Public method to save a token (used for refreshed tokens)
+    pub fn save_refreshed_token(token: &AuthToken) -> AuthResult<()> {
+        let instance = GoogleAuth::new();
+        instance.save_token(token)
+    }
+
+    /// Save Google refresh token to User config for easier access
+    fn save_refresh_token_to_user_config(refresh_token: &str) -> AuthResult<()> {
+        use crate::user::User;
+        
+        let mut user_config = User::new();
+        // Try to read existing config, but don't fail if it doesn't exist
+        let _ = user_config.read_config_file();
+        
+        // Update the Google refresh token
+        user_config.google_refresh_token = refresh_token.to_string();
+        
+        // Save the updated config
+        user_config.save_config_file()
+            .change_context(AuthError::new("Failed to save user config"))
     }
 }

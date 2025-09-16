@@ -152,7 +152,7 @@ impl SoundeoTrack {
         use crate::auth::{firebase_client::FirebaseClient, google_auth::GoogleAuth};
         
         // Load auth token
-        let auth_token = match GoogleAuth::load_token() {
+        let auth_token = match GoogleAuth::load_token().await {
             Ok(token) => token,
             Err(_) => return Ok(None), // No auth, fallback to local
         };

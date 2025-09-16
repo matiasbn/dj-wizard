@@ -195,6 +195,92 @@ impl User {
             )))
         }
     }
+
+    pub async fn refresh_google_token(&mut self) -> SoundeoUserResult<()> {
+        println!("Google access token expired. Attempting to refresh...");
+
+        if self.google_refresh_token.is_empty() {
+            return Err(Report::new(SoundeoUserError)
+                .attach_printable("No Google refresh token available. Please run 'dj-wizard auth' again."));
+        }
+
+        let client_id = AppConfig::GOOGLE_OAUTH_CLIENT_ID.to_string();
+        let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
+            .into_report()
+            .change_context(SoundeoUserError)
+            .attach_printable("GOOGLE_CLIENT_SECRET environment variable not set")?;
+        
+        let client = reqwest::Client::new();
+        let params = [
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", self.google_refresh_token.clone()),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+        ];
+
+        let token_response: serde_json::Value = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(SoundeoUserError)?
+            .json()
+            .await
+            .into_report()
+            .change_context(SoundeoUserError)?;
+
+        if let Some(new_access_token) = token_response["access_token"].as_str() {
+            // For Google tokens, we don't store the access token in User struct
+            // Instead, we need to update the stored AuthToken file
+            use crate::auth::{AuthToken, google_auth::GoogleAuth};
+            
+            // Load current token to preserve other fields
+            let mut auth_token = match GoogleAuth::load_token().await {
+                Ok(token) => token,
+                Err(_) => {
+                    // Create a new token structure if we can't load the existing one
+                    AuthToken {
+                        access_token: new_access_token.to_string(),
+                        refresh_token: Some(self.google_refresh_token.clone()),
+                        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                        user_email: "".to_string(),
+                        user_id: "".to_string(),
+                    }
+                }
+            };
+
+            // Update the access token
+            auth_token.access_token = new_access_token.to_string();
+            
+            // Update refresh token if a new one is provided
+            if let Some(new_refresh_token) = token_response["refresh_token"].as_str() {
+                auth_token.refresh_token = Some(new_refresh_token.to_string());
+                self.google_refresh_token = new_refresh_token.to_string();
+            }
+
+            // Update expiry time
+            let expires_in = token_response["expires_in"]
+                .as_u64()
+                .unwrap_or(3600); // Default to 1 hour
+            auth_token.expires_at = chrono::Utc::now() + chrono::Duration::seconds(expires_in as i64);
+
+            // Save the updated token
+            GoogleAuth::save_refreshed_token(&auth_token)
+                .change_context(SoundeoUserError)?;
+            
+            // Also save this User config to persist the refresh token
+            self.save_config_file()?;
+            
+            println!("{}", "Google token refreshed successfully.".green());
+            Ok(())
+        } else {
+            Err(Report::new(SoundeoUserError).attach_printable(format!(
+                "Failed to refresh Google token. Response: {:?}",
+                token_response
+            )))
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

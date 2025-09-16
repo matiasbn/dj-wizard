@@ -129,7 +129,7 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 // Load auth token
-                let auth_token = GoogleAuth::load_token().map_err(|_| "No auth")?;
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
                 
                 // Create Firebase client
                 let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
@@ -147,7 +147,7 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 // Load auth token
-                let auth_token = GoogleAuth::load_token().map_err(|_| "No auth")?;
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
                 
                 // Create Firebase client
                 let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
