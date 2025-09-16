@@ -682,11 +682,9 @@ impl FirebaseClient {
         println!("📊 Found {} existing queued tracks in Firebase", existing_ids.len());
         
         if !existing_ids.is_empty() {
-            println!("📝 Marking {} existing queued tracks as migrated locally...", existing_ids.len());
-            for track_id in &existing_ids {
-                let _ = crate::log::DjWizardLog::mark_queued_track_as_migrated(track_id);
-            }
-            println!("✅ Marked existing queued tracks as migrated (save is automatic)");
+            println!("📝 Storing {} existing queued track IDs in bulk locally...", existing_ids.len());
+            let _ = crate::log::DjWizardLog::set_firebase_migrated_queues(existing_ids.clone());
+            println!("✅ Stored existing queued track IDs in bulk (single save operation)");
         }
         
         // STEP 2: Filter only tracks NOT in Firebase

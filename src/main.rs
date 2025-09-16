@@ -846,22 +846,36 @@ impl DjWizardCommands {
                     let all_queued_tracks =
                         DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
 
-                    // Filter only non-migrated tracks
+                    // Get Firebase migrated queue IDs for bulk filtering (much faster than individual checks)
+                    let firebase_migrated_queues = DjWizardLog::get_firebase_migrated_queues()
+                        .change_context(DjWizardError)?;
+                    let firebase_migrated_set: std::collections::HashSet<String> = firebase_migrated_queues.into_iter().collect();
+                    let total_all_queued_tracks = all_queued_tracks.len();
+
+                    // Filter only tracks NOT migrated AND NOT in Firebase migrated array (bulk filtering)
                     let queued_tracks: Vec<_> = all_queued_tracks
                         .into_iter()
-                        .filter(|track| !track.migrated)
+                        .filter(|track| {
+                            // Only migrate if NOT migrated AND NOT in Firebase migrated array
+                            !track.migrated && !firebase_migrated_set.contains(&track.track_id)
+                        })
                         .collect();
+
+                    let already_migrated = total_all_queued_tracks - queued_tracks.len();
 
                     if queued_tracks.is_empty() {
                         println!(
-                            "ℹ️  No pending queued tracks found to migrate (all already migrated)"
+                            "ℹ️  No pending queued tracks found to migrate ({} already processed using bulk filtering)",
+                            already_migrated
                         );
                         return Ok(());
                     }
 
                     println!(
-                        "📊 Found {} pending queued tracks to migrate",
-                        queued_tracks.len()
+                        "📊 Found {} pending queued tracks to migrate ({} already processed, {} total)",
+                        queued_tracks.len(),
+                        already_migrated,
+                        total_all_queued_tracks
                     );
 
                     // Migrate to priority-based structure
