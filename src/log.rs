@@ -155,6 +155,18 @@ impl DjWizardLog {
         Ok(log.url_list)
     }
 
+    /// Mark a track as migrated to Firebase
+    pub fn mark_track_as_migrated(track_id: &str) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        
+        if let Some(track) = log.soundeo.tracks_info.get_mut(track_id) {
+            track.migrated = true;
+            log.save_log()?;
+        }
+        
+        Ok(())
+    }
+
     pub fn get_genre_tracker() -> DjWizardLogResult<GenreTracker> {
         let log = Self::read_log()?;
         Ok(log.genre_tracker)

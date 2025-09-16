@@ -42,6 +42,8 @@ pub struct SoundeoTrack {
     pub downloadable: bool,
     #[serde(default)]
     pub already_downloaded: bool,
+    #[serde(default)]
+    pub migrated: bool,
 }
 
 impl SoundeoTrack {
@@ -59,6 +61,7 @@ impl SoundeoTrack {
             size: Some("".to_string()),
             downloadable: false,
             already_downloaded: false,
+            migrated: false,
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser, print: bool) -> SoundeoResult<()> {
