@@ -755,7 +755,7 @@ impl MigrateCli {
             // url_list stays as separate collection (not in dj_wizard_data)
             println!("📁 Migrating url_list...");
             firebase_client
-                .save_url_list(&log_data.url_list)
+                .migrate_save_url_list(&log_data.url_list)
                 .await
                 .map_err(|e| {
                     eprintln!("Failed to migrate url_list: {}", e);
