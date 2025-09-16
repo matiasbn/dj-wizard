@@ -93,6 +93,15 @@ enum DjWizardCommands {
         /// Only migrate light fields (exclude soundeo and queued_tracks)
         #[clap(long)]
         light_only: bool,
+        /// Migrate queued tracks
+        #[clap(long)]
+        queued_tracks: bool,
+        /// Migrate soundeo field
+        #[clap(long)]
+        soundeo: bool,
+        /// Migrate all remaining fields (tracks_info, etc.)
+        #[clap(long)]
+        remaining: bool,
     },
 }
 
@@ -101,12 +110,14 @@ impl DjWizardCommands {
         return match self {
             DjWizardCommands::Auth => {
                 use crate::auth::google_auth::GoogleAuth;
-                
+
                 let google_auth = GoogleAuth::new();
                 let result = google_auth.login().await;
                 match result {
                     Ok(_token) => {
-                        println!("Authentication successful! Your data will now sync to the cloud.");
+                        println!(
+                            "Authentication successful! Your data will now sync to the cloud."
+                        );
                         Ok(())
                     }
                     Err(_) => {
@@ -241,85 +252,311 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
-            DjWizardCommands::Artist => {
-                ArtistCommands::execute()
-                    .change_context(DjWizardError)
-            }
-            DjWizardCommands::Migrate { soundeo_log, light_only } => {
-                use crate::auth::google_auth::GoogleAuth;
+            DjWizardCommands::Artist => ArtistCommands::execute().change_context(DjWizardError),
+            DjWizardCommands::Migrate {
+                soundeo_log,
+                light_only,
+                queued_tracks,
+                soundeo,
+                remaining,
+            } => {
                 use crate::auth::firebase_client::FirebaseClient;
-                
+                use crate::auth::google_auth::GoogleAuth;
+
                 // Try to load existing token
                 let auth_token = match GoogleAuth::load_token() {
                     Ok(token) => token,
                     Err(_) => {
-                        println!("❌ No valid authentication found. Please run 'dj-wizard auth' first.");
+                        println!(
+                            "❌ No valid authentication found. Please run 'dj-wizard auth' first."
+                        );
                         return Err(DjWizardError).into_report();
                     }
                 };
-                
+
                 // Create Firebase client
-                let firebase_client = FirebaseClient::new(auth_token).await
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
                     .change_context(DjWizardError)?;
-                
+
                 // Set default path if not provided
                 let default_log_path = "/Users/matiasbn/soundeo-bot-files/soundeo_log.json";
                 let log_path = soundeo_log.as_deref().unwrap_or(default_log_path);
-                
+
                 println!("🔄 Migrating complete soundeo_log.json to Firebase...");
                 println!("📂 Reading from: {}", log_path);
-                
+
                 // Check file size first
-                let metadata = std::fs::metadata(log_path)
-                    .map_err(|e| {
-                        println!("❌ Failed to read file metadata: {}", e);
-                        DjWizardError
-                    })?;
-                
+                let metadata = std::fs::metadata(log_path).map_err(|e| {
+                    println!("❌ Failed to read file metadata: {}", e);
+                    DjWizardError
+                })?;
+
                 let file_size_mb = metadata.len() as f64 / 1024.0 / 1024.0;
                 println!("📊 File size: {:.2} MB", file_size_mb);
-                
+
                 if file_size_mb > 1.0 {
                     println!("⚠️  Warning: File is larger than 1MB. Firebase might reject it.");
                     println!("💡 Consider using a smaller test file first.");
                 }
-                
+
                 // Read the entire JSON file
                 println!("📖 Reading file contents...");
-                let log_data = std::fs::read_to_string(log_path)
-                    .map_err(|e| {
-                        println!("❌ Failed to read log file: {}", e);
-                        DjWizardError
-                    })?;
-                
+                let log_data = std::fs::read_to_string(log_path).map_err(|e| {
+                    println!("❌ Failed to read log file: {}", e);
+                    DjWizardError
+                })?;
+
                 println!("✅ File read successfully ({} bytes)", log_data.len());
-                
+
                 // Parse as JSON to validate it's correct
                 println!("🔍 Parsing JSON...");
-                let json_value: serde_json::Value = serde_json::from_str(&log_data)
-                    .map_err(|e| {
+                let json_value: serde_json::Value =
+                    serde_json::from_str(&log_data).map_err(|e| {
                         println!("❌ Invalid JSON file: {}", e);
                         DjWizardError
                     })?;
-                
+
                 println!("✅ JSON parsed successfully");
-                
+
+                if *queued_tracks {
+                    // Special mode: add queued tracks to existing document
+                    println!("🎯 Queued tracks mode: Adding to existing document...");
+
+                    if let serde_json::Value::Object(map) = &json_value {
+                        if let Some(serde_json::Value::Array(tracks)) = map.get("queued_tracks") {
+                            println!("📊 Found {} queued tracks", tracks.len());
+
+                            // Get existing document first
+                            println!("📥 Getting existing document...");
+                            let mut existing_doc = firebase_client
+                                .get_document("dj_wizard_data", "soundeo_log")
+                                .await
+                                .change_context(DjWizardError)?
+                                .unwrap_or_else(|| serde_json::json!({}));
+
+                            // Add queued_tracks to existing document
+                            if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
+                                existing_map.insert(
+                                    "queued_tracks".to_string(),
+                                    serde_json::Value::Array(tracks.clone()),
+                                );
+                                println!("✅ Added queued_tracks to existing document");
+                            } else {
+                                // If not an object, create new structure
+                                existing_doc = serde_json::json!({
+                                    "queued_tracks": tracks
+                                });
+                                println!("✅ Created new document with queued_tracks");
+                            }
+
+                            // Upload updated document
+                            println!("☁️  Uploading updated document...");
+                            firebase_client
+                                .set_document("dj_wizard_data", "soundeo_log", &existing_doc)
+                                .await
+                                .change_context(DjWizardError)?;
+
+                            println!(
+                                "🎉 Successfully added {} queued tracks to existing document!",
+                                tracks.len()
+                            );
+                            return Ok(());
+                        } else {
+                            println!("❌ No 'queued_tracks' field found in JSON");
+                            return Err(DjWizardError).into_report();
+                        }
+                    } else {
+                        println!("❌ JSON is not an object");
+                        return Err(DjWizardError).into_report();
+                    }
+                }
+
+                if *soundeo {
+                    // Use existing DjWizardLog logic to read soundeo properly
+                    println!("🎵 Soundeo mode: Using existing log reader...");
+
+                    // Read soundeo using the existing working logic
+                    use crate::log::DjWizardLog;
+                    let current_soundeo =
+                        DjWizardLog::get_soundeo().change_context(DjWizardError)?;
+
+                    println!(
+                        "📊 Found soundeo with {} tracks_info",
+                        current_soundeo.tracks_info.len()
+                    );
+
+                    // Get existing document first
+                    println!("📥 Getting existing document...");
+                    let mut existing_doc = firebase_client
+                        .get_document("dj_wizard_data", "soundeo_log")
+                        .await
+                        .change_context(DjWizardError)?
+                        .unwrap_or_else(|| serde_json::json!({}));
+
+                    if current_soundeo.tracks_info.is_empty() {
+                        // No tracks_info, just add soundeo structure
+                        let soundeo_value = serde_json::to_value(&current_soundeo)
+                            .into_report()
+                            .change_context(DjWizardError)?;
+
+                        if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
+                            existing_map.insert("soundeo".to_string(), soundeo_value);
+                        } else {
+                            existing_doc = serde_json::json!({
+                                "soundeo": soundeo_value
+                            });
+                        }
+
+                        firebase_client
+                            .set_document("dj_wizard_data", "soundeo_log", &existing_doc)
+                            .await
+                            .change_context(DjWizardError)?;
+
+                        println!("🎉 Successfully added empty soundeo field!");
+                    } else {
+                        // Has tracks_info - migrate in batches
+                        let tracks: Vec<_> = current_soundeo.tracks_info.into_iter().collect();
+
+                        // Initialize soundeo structure in document first (empty tracks_info)
+                        let empty_soundeo = crate::soundeo::Soundeo::new();
+                        let soundeo_value = serde_json::to_value(&empty_soundeo)
+                            .into_report()
+                            .change_context(DjWizardError)?;
+
+                        if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
+                            existing_map.insert("soundeo".to_string(), soundeo_value);
+                        } else {
+                            existing_doc = serde_json::json!({
+                                "soundeo": soundeo_value
+                            });
+                        }
+
+                        // Migrate tracks_info in batches of 1000
+                        let batch_size = 200;
+                        let total_batches = (tracks.len() + batch_size - 1) / batch_size;
+
+                        for (batch_num, chunk) in tracks.chunks(batch_size).enumerate() {
+                            println!(
+                                "📤 Adding batch {}/{} ({} tracks) to soundeo.tracks_info...",
+                                batch_num + 1,
+                                total_batches,
+                                chunk.len()
+                            );
+
+                            // Add current batch to existing soundeo.tracks_info
+                            if let serde_json::Value::Object(ref mut doc_map) = existing_doc {
+                                if let Some(serde_json::Value::Object(ref mut soundeo_map)) =
+                                    doc_map.get_mut("soundeo")
+                                {
+                                    if let Some(serde_json::Value::Object(
+                                        ref mut tracks_info_map,
+                                    )) = soundeo_map.get_mut("tracks_info")
+                                    {
+                                        for (track_id, track) in chunk {
+                                            let track_value = serde_json::to_value(track)
+                                                .into_report()
+                                                .change_context(DjWizardError)?;
+                                            tracks_info_map.insert(track_id.clone(), track_value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Upload document with accumulated tracks
+                            firebase_client
+                                .set_document("dj_wizard_data", "soundeo_log", &existing_doc)
+                                .await
+                                .change_context(DjWizardError)?;
+
+                            println!(
+                                "✅ Batch {}/{} added to soundeo.tracks_info",
+                                batch_num + 1,
+                                total_batches
+                            );
+                        }
+
+                        println!(
+                            "🎉 Successfully migrated all {} tracks to soundeo.tracks_info!",
+                            tracks.len()
+                        );
+                    }
+
+                    return Ok(());
+                }
+
+                if *remaining {
+                    // Special mode: add any remaining fields to existing document
+                    println!("📦 Remaining fields mode: Adding all missing fields...");
+
+                    if let serde_json::Value::Object(map) = &json_value {
+                        // Get existing document first
+                        println!("📥 Getting existing document...");
+                        let mut existing_doc = firebase_client
+                            .get_document("dj_wizard_data", "soundeo_log")
+                            .await
+                            .change_context(DjWizardError)?
+                            .unwrap_or_else(|| serde_json::json!({}));
+
+                        let mut added_fields = Vec::new();
+
+                        // Add any missing fields to existing document
+                        if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
+                            for (key, value) in map.iter() {
+                                if !existing_map.contains_key(key) {
+                                    existing_map.insert(key.clone(), value.clone());
+                                    added_fields.push(key.clone());
+                                }
+                            }
+                        } else {
+                            // If not an object, create new structure with all fields
+                            existing_doc = serde_json::Value::Object(map.clone());
+                            added_fields = map.keys().cloned().collect();
+                        }
+
+                        if added_fields.is_empty() {
+                            println!(
+                                "ℹ️  No new fields to add - document already contains all data"
+                            );
+                            return Ok(());
+                        }
+
+                        println!("✅ Added fields: {:?}", added_fields);
+
+                        // Upload updated document
+                        println!("☁️  Uploading updated document...");
+                        firebase_client
+                            .set_document("dj_wizard_data", "soundeo_log", &existing_doc)
+                            .await
+                            .change_context(DjWizardError)?;
+
+                        println!(
+                            "🎉 Successfully added {} remaining fields to existing document!",
+                            added_fields.len()
+                        );
+                        return Ok(());
+                    } else {
+                        println!("❌ JSON is not an object");
+                        return Err(DjWizardError).into_report();
+                    }
+                }
+
                 let final_data = if *light_only {
                     println!("🪶 Light mode: Filtering out heavy fields...");
-                    
+
                     // Extract only light fields, exclude heavy ones
                     if let serde_json::Value::Object(mut map) = json_value {
                         // Remove heavy fields
                         let removed_soundeo = map.remove("soundeo");
                         let removed_queued = map.remove("queued_tracks");
-                        
+
                         if removed_soundeo.is_some() {
                             println!("🗑️  Excluded 'soundeo' field");
                         }
                         if removed_queued.is_some() {
                             println!("🗑️  Excluded 'queued_tracks' field");
                         }
-                        
+
                         println!("✅ Remaining fields: {:?}", map.keys().collect::<Vec<_>>());
                         serde_json::Value::Object(map)
                     } else {
@@ -330,17 +567,22 @@ impl DjWizardCommands {
                     println!("📦 Full mode: Uploading complete file...");
                     json_value
                 };
-                
+
                 // Show final size
                 let final_size = serde_json::to_string(&final_data).unwrap().len();
                 let final_size_mb = final_size as f64 / 1024.0 / 1024.0;
-                println!("📊 Final upload size: {:.2} MB ({} bytes)", final_size_mb, final_size);
-                
+                println!(
+                    "📊 Final upload size: {:.2} MB ({} bytes)",
+                    final_size_mb, final_size
+                );
+
                 // Upload the data
                 println!("☁️  Uploading to Firebase...");
-                firebase_client.set_document("dj_wizard_data", "soundeo_log", &final_data).await
+                firebase_client
+                    .set_document("dj_wizard_data", "soundeo_log", &final_data)
+                    .await
                     .change_context(DjWizardError)?;
-                
+
                 println!("✅ Successfully migrated entire soundeo_log.json to Firebase!");
                 println!("🎉 Your data is now available in the cloud!");
                 Ok(())
@@ -386,13 +628,28 @@ impl DjWizardCommands {
             DjWizardCommands::Artist => {
                 format!("dj-wizard artist")
             }
-            DjWizardCommands::Migrate { soundeo_log, light_only } => {
+            DjWizardCommands::Migrate {
+                soundeo_log,
+                light_only,
+                queued_tracks,
+                soundeo,
+                remaining,
+            } => {
                 let mut cmd = "dj-wizard migrate".to_string();
                 if let Some(log_path) = soundeo_log {
                     cmd.push_str(&format!(" --soundeo-log {}", log_path));
                 }
                 if *light_only {
                     cmd.push_str(" --light-only");
+                }
+                if *queued_tracks {
+                    cmd.push_str(" --queued-tracks");
+                }
+                if *soundeo {
+                    cmd.push_str(" --soundeo");
+                }
+                if *remaining {
+                    cmd.push_str(" --remaining");
                 }
                 cmd
             }

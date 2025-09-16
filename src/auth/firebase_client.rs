@@ -130,7 +130,15 @@ impl FirebaseClient {
     fn convert_to_firestore_value(&self, value: &Value) -> Value {
         match value {
             Value::String(s) => serde_json::json!({"stringValue": s}),
-            Value::Number(n) => serde_json::json!({"integerValue": n.to_string()}),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    serde_json::json!({"integerValue": i.to_string()})
+                } else if let Some(f) = n.as_f64() {
+                    serde_json::json!({"doubleValue": f})
+                } else {
+                    serde_json::json!({"stringValue": n.to_string()})
+                }
+            },
             Value::Bool(b) => serde_json::json!({"booleanValue": b}),
             Value::Array(arr) => serde_json::json!({
                 "arrayValue": {
