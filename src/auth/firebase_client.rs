@@ -299,9 +299,49 @@ impl FirebaseClient {
     
     /// Get soundeo data from soundeo_tracks collection
     pub async fn get_soundeo(&self) -> Result<crate::soundeo::Soundeo, Box<dyn std::error::Error>> {
-        // For now, return empty Soundeo since individual tracks should be accessed separately
-        // This maintains backward compatibility while using the new structure
-        Ok(crate::soundeo::Soundeo::new())
+        // Get all tracks from soundeo_tracks collection and reconstruct Soundeo
+        let tracks_map = self.get_all_soundeo_tracks().await?;
+        let mut soundeo = crate::soundeo::Soundeo::new();
+        soundeo.tracks_info = tracks_map;
+        Ok(soundeo)
+    }
+
+    /// Get soundeo tracks info (HashMap only) - optimized method
+    pub async fn get_soundeo_tracks_info(&self) -> Result<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
+        self.get_all_soundeo_tracks().await
+    }
+
+    /// Get all soundeo tracks from Firebase
+    pub async fn get_all_soundeo_tracks(&self) -> Result<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
+        let collection_url = format!(
+            "{}/users/{}/soundeo_tracks",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id)
+        );
+        
+        let response = self.client.get(&collection_url).bearer_auth(&self.access_token).send().await?;
+        
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(std::collections::HashMap::new());
+        }
+        
+        let firestore_response: Value = response.json().await?;
+        let mut tracks_map = std::collections::HashMap::new();
+        
+        if let Some(documents) = firestore_response.get("documents") {
+            if let Value::Array(docs) = documents {
+                for doc in docs {
+                    if let Some(fields) = doc.get("fields") {
+                        let track_value = self.convert_firestore_fields_to_value(fields);
+                        if let Ok(track) = serde_json::from_value::<crate::soundeo::track::SoundeoTrack>(track_value) {
+                            tracks_map.insert(track.id.clone(), track);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(tracks_map)
     }
     
     /// Save soundeo data - this is a no-op since we save individual tracks to soundeo_tracks collection

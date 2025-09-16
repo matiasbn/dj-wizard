@@ -22,8 +22,8 @@ impl TrackProcessor {
     ) -> QueueResult<(usize, usize)> {
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
-        let queued_ids: HashSet<String> = queued_tracks.iter().map(|t| t.track_id.clone()).collect();
-        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let queued_ids: HashSet<String> =
+            queued_tracks.iter().map(|t| t.track_id.clone()).collect();
 
         let total_tracks = track_ids.len();
         let mut total_added = 0;
@@ -97,7 +97,7 @@ impl TrackProcessor {
             // Add to queue
             let queue_result = DjWizardLog::add_queued_track(track_id.clone(), priority)
                 .change_context(QueueError)?;
-            
+
             if queue_result {
                 println!(
                     "Track {} successfully queued: {}",

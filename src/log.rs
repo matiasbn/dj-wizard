@@ -122,10 +122,16 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     pub fn get_soundeo() -> DjWizardLogResult<Soundeo> {
@@ -133,8 +139,25 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .get_soundeo()
+                    .await
+                    .map_err(|_| "Failed to get soundeo from Firebase")
+            })
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+    }
+
+    pub fn get_soundeo_tracks_info() -> DjWizardLogResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
+        // Use Firebase only - optimized method that returns just the HashMap
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
                 let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.get_soundeo().await.map_err(|_| "Failed to get soundeo from Firebase")
+                firebase_client.get_soundeo_tracks_info().await.map_err(|_| "Failed to get soundeo tracks info from Firebase")
             })
         }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
@@ -144,10 +167,16 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.get_url_list().await.map_err(|_| "Failed to get url_list from Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .get_url_list()
+                    .await
+                    .map_err(|_| "Failed to get url_list from Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     /// Mark a track as migrated to Firebase
@@ -201,10 +230,16 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.get_genre_tracker().await.map_err(|_| "Failed to get genre_tracker from Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .get_genre_tracker()
+                    .await
+                    .map_err(|_| "Failed to get genre_tracker from Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn read_log() -> DjWizardLogResult<Self> {
@@ -364,10 +399,16 @@ impl DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.remove_available_track(&track_id).await.map_err(|_| "Failed to remove track from Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .remove_available_track(&track_id)
+                    .await
+                    .map_err(|_| "Failed to remove track from Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     pub fn upload_to_ipfs() -> DjWizardLogResult<()> {
@@ -427,19 +468,30 @@ impl DjWizardLog {
         if new_pairs.is_empty() {
             return Ok(());
         }
-        
+
         // Use Firebase only - no local storage
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current spotify data, update pairs, and save back
-                let mut spotify = firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")?;
-                spotify.soundeo_track_ids.extend(new_pairs.iter().map(|(k, v)| (k.clone(), v.clone())));
-                firebase_client.save_spotify(&spotify).await.map_err(|_| "Failed to save spotify to Firebase")
+                let mut spotify = firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")?;
+                spotify
+                    .soundeo_track_ids
+                    .extend(new_pairs.iter().map(|(k, v)| (k.clone(), v.clone())));
+                firebase_client
+                    .save_spotify(&spotify)
+                    .await
+                    .map_err(|_| "Failed to save spotify to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     /// Mark a queued track as migrated
@@ -470,12 +522,18 @@ impl SoundeoCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Save individual track to soundeo_tracks collection
-                firebase_client.save_soundeo_track(&soundeo_track).await.map_err(|_| "Failed to save soundeo track to Firebase")
+                firebase_client
+                    .save_soundeo_track(&soundeo_track)
+                    .await
+                    .map_err(|_| "Failed to save soundeo track to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn mark_track_as_downloaded(soundeo_track_id: String) -> DjWizardLogResult<()> {
@@ -483,16 +541,26 @@ impl SoundeoCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get individual track from Firebase
-                if let Some(mut track) = firebase_client.get_soundeo_track(&soundeo_track_id).await.map_err(|_| "Failed to get soundeo track from Firebase")? {
+                if let Some(mut track) = firebase_client
+                    .get_soundeo_track(&soundeo_track_id)
+                    .await
+                    .map_err(|_| "Failed to get soundeo track from Firebase")?
+                {
                     track.already_downloaded = true;
-                    firebase_client.save_soundeo_track(&track).await.map_err(|_| "Failed to save soundeo track to Firebase")?;
+                    firebase_client
+                        .save_soundeo_track(&track)
+                        .await
+                        .map_err(|_| "Failed to save soundeo track to Firebase")?;
                 }
                 Ok(())
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn reset_track_already_downloaded(soundeo_track_id: String) -> DjWizardLogResult<()> {
@@ -500,16 +568,26 @@ impl SoundeoCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get individual track from Firebase
-                if let Some(mut track) = firebase_client.get_soundeo_track(&soundeo_track_id).await.map_err(|_| "Failed to get soundeo track from Firebase")? {
+                if let Some(mut track) = firebase_client
+                    .get_soundeo_track(&soundeo_track_id)
+                    .await
+                    .map_err(|_| "Failed to get soundeo track from Firebase")?
+                {
                     track.already_downloaded = false;
-                    firebase_client.save_soundeo_track(&track).await.map_err(|_| "Failed to save soundeo track to Firebase")?;
+                    firebase_client
+                        .save_soundeo_track(&track)
+                        .await
+                        .map_err(|_| "Failed to save soundeo track to Firebase")?;
                 }
                 Ok(())
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 }
 
@@ -519,14 +597,26 @@ impl SpotifyCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current spotify data, update playlist, and save back
-                let mut spotify = firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")?;
-                spotify.playlists.insert(spotify_playlist.spotify_playlist_id.clone(), spotify_playlist);
-                firebase_client.save_spotify(&spotify).await.map_err(|_| "Failed to save spotify to Firebase")
+                let mut spotify = firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")?;
+                spotify.playlists.insert(
+                    spotify_playlist.spotify_playlist_id.clone(),
+                    spotify_playlist,
+                );
+                firebase_client
+                    .save_spotify(&spotify)
+                    .await
+                    .map_err(|_| "Failed to save spotify to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn update_spotify_to_soundeo_track(
@@ -537,14 +627,25 @@ impl SpotifyCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current spotify data, update track mapping, and save back
-                let mut spotify = firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")?;
-                spotify.soundeo_track_ids.insert(spotify_track_id, soundeo_track_id);
-                firebase_client.save_spotify(&spotify).await.map_err(|_| "Failed to save spotify to Firebase")
+                let mut spotify = firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")?;
+                spotify
+                    .soundeo_track_ids
+                    .insert(spotify_track_id, soundeo_track_id);
+                firebase_client
+                    .save_spotify(&spotify)
+                    .await
+                    .map_err(|_| "Failed to save spotify to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn delete_spotify_playlists(playlist_ids: &[String]) -> DjWizardLogResult<()> {
@@ -552,24 +653,33 @@ impl SpotifyCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current spotify data, delete playlists, and save back
-                let mut spotify = firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")?;
+                let mut spotify = firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")?;
                 let mut deleted_count = 0;
-                
+
                 for id in playlist_ids {
                     if spotify.playlists.remove(id).is_some() {
                         deleted_count += 1;
                     }
                 }
-                
+
                 if deleted_count > 0 {
-                    firebase_client.save_spotify(&spotify).await.map_err(|_| "Failed to save spotify to Firebase")?;
+                    firebase_client
+                        .save_spotify(&spotify)
+                        .await
+                        .map_err(|_| "Failed to save spotify to Firebase")?;
                 }
                 Ok(())
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn add_to_multiple_matches_cache(
@@ -580,14 +690,23 @@ impl SpotifyCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current spotify data, update cache, and save back
-                let mut spotify = firebase_client.get_spotify().await.map_err(|_| "Failed to get spotify from Firebase")?;
+                let mut spotify = firebase_client
+                    .get_spotify()
+                    .await
+                    .map_err(|_| "Failed to get spotify from Firebase")?;
                 spotify.multiple_matches_cache.insert(spotify_id, results);
-                firebase_client.save_spotify(&spotify).await.map_err(|_| "Failed to save spotify to Firebase")
+                firebase_client
+                    .save_spotify(&spotify)
+                    .await
+                    .map_err(|_| "Failed to save spotify to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 }
 
@@ -597,15 +716,24 @@ impl UrlListCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current url_list, add URL, and save back
-                let mut url_list = firebase_client.get_url_list().await.map_err(|_| "Failed to get url_list from Firebase")?;
+                let mut url_list = firebase_client
+                    .get_url_list()
+                    .await
+                    .map_err(|_| "Failed to get url_list from Firebase")?;
                 let result = url_list.insert(soundeo_url.to_string());
-                firebase_client.save_url_list(&url_list).await.map_err(|_| "Failed to save url_list to Firebase")?;
+                firebase_client
+                    .save_url_list(&url_list)
+                    .await
+                    .map_err(|_| "Failed to save url_list to Firebase")?;
                 Ok(result)
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn remove_url_from_url_list(soundeo_url: String) -> DjWizardLogResult<bool> {
@@ -613,15 +741,24 @@ impl UrlListCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+
                 // Get current url_list, remove URL, and save back
-                let mut url_list = firebase_client.get_url_list().await.map_err(|_| "Failed to get url_list from Firebase")?;
+                let mut url_list = firebase_client
+                    .get_url_list()
+                    .await
+                    .map_err(|_| "Failed to get url_list from Firebase")?;
                 let result = url_list.remove(&soundeo_url);
-                firebase_client.save_url_list(&url_list).await.map_err(|_| "Failed to save url_list to Firebase")?;
+                firebase_client
+                    .save_url_list(&url_list)
+                    .await
+                    .map_err(|_| "Failed to save url_list to Firebase")?;
                 Ok(result)
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 }
 
@@ -631,10 +768,16 @@ impl GenreTrackerCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.get_genre_tracker().await.map_err(|_| "Failed to get genre_tracker from Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .get_genre_tracker()
+                    .await
+                    .map_err(|_| "Failed to get genre_tracker from Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
     fn save_genre_tracker(tracker: GenreTracker) -> DjWizardLogResult<()> {
@@ -642,10 +785,16 @@ impl GenreTrackerCRUD for DjWizardLog {
         Ok(tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
-                firebase_client.save_genre_tracker(&tracker).await.map_err(|_| "Failed to save genre_tracker to Firebase")
+                let firebase_client = FirebaseClient::new(auth_token)
+                    .await
+                    .map_err(|_| "Firebase unavailable")?;
+                firebase_client
+                    .save_genre_tracker(&tracker)
+                    .await
+                    .map_err(|_| "Failed to save genre_tracker to Firebase")
             })
-        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        })
+        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 }
 
@@ -662,15 +811,11 @@ impl ArtistCRUD for DjWizardLog {
                     .await
                     .map_err(|_| "Firebase unavailable")?;
 
-                // Get artists from Firebase
+                // Get artists from Firebase - no fallback
                 match firebase_client.load_artists().await {
                     Ok(Some(artist_manager)) => Ok(artist_manager),
                     Ok(None) => Ok(ArtistManager::default()), // Return empty manager if no data
-                    Err(_) => {
-                        // Fallback to local if Firebase fails
-                        let log = Self::read_log().map_err(|_| "Local fallback failed")?;
-                        Ok(log.artist_manager)
-                    }
+                    Err(_) => Err("Failed to get artists from Firebase")
                 }
             })
         })
@@ -689,21 +834,9 @@ impl ArtistCRUD for DjWizardLog {
                     .await
                     .map_err(|_| "Firebase unavailable")?;
 
-                // Save to Firebase
-                match firebase_client.save_artists(&manager).await {
-                    Ok(()) => Ok(()),
-                    Err(_) => {
-                        // Fallback to local if Firebase fails
-                        let mut log = Self::read_log().map_err(|_| "Local fallback failed")?;
-                        log.last_update = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map_err(|_| "Time error")?
-                            .as_secs();
-                        log.artist_manager = manager;
-                        log.save_log().map_err(|_| "Save failed")?;
-                        Ok(())
-                    }
-                }
+                // Save to Firebase - no fallback
+                firebase_client.save_artists(&manager).await.map_err(|_| "Failed to save artists to Firebase")
+            
             })
         })
         .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)

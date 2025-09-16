@@ -73,9 +73,9 @@ impl SoundeoTrack {
             }
         }
         
-        // Fallback to local JSON
-        let soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
-        return match soundeo.tracks_info.get(&self.id) {
+        // Fallback to Firebase
+        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SoundeoError)?;
+        return match soundeo_tracks_info.get(&self.id) {
             Some(full_info) => {
                 self.clone_from(full_info);
                 Ok(())

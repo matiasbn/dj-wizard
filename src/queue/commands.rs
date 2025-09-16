@@ -405,13 +405,37 @@ impl QueueCommands {
     }
 
     fn get_queue_information() -> QueueResult<()> {
-        let Soundeo { tracks_info, .. } = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+        
+        // Debug info
+        println!("🔍 Debug info:");
+        println!("  - Queued tracks: {}", queued_tracks.len());
+        println!("  - Soundeo tracks: {}", tracks_info.len());
+        
+        if queued_tracks.is_empty() {
+            println!("⚠️  No tracks in queue");
+            return Ok(());
+        }
+        
+        if tracks_info.is_empty() {
+            println!("⚠️  No tracks in soundeo tracks_info");
+            return Ok(());
+        }
+
         let q_tracks_info: Vec<SoundeoTrack> = queued_tracks
             .iter()
-            .filter_map(|q_track| tracks_info.get(&q_track.track_id))
-            .cloned()
+            .filter_map(|q_track| {
+                let track = tracks_info.get(&q_track.track_id);
+                if track.is_none() {
+                    println!("⚠️  Track {} not found in soundeo tracks_info", q_track.track_id);
+                }
+                track.cloned()
+            })
             .collect();
+        
+        println!("  - Matched tracks: {}", q_tracks_info.len());
+        
         let mut genres_hash_set = HashSet::new();
         for track in q_tracks_info.clone() {
             genres_hash_set.insert(track.genre);
@@ -459,7 +483,7 @@ impl QueueCommands {
     }
 
     async fn prioritize_by_genre() -> QueueResult<()> {
-        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let soundeo_info = DjWizardLog::get_soundeo_tracks_info().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
         if queued_tracks.is_empty() {
@@ -469,7 +493,7 @@ impl QueueCommands {
 
         let mut genres_in_queue = HashSet::new();
         for track in &queued_tracks {
-            if let Some(track_info) = soundeo_info.tracks_info.get(&track.track_id) {
+            if let Some(track_info) = soundeo_info.get(&track.track_id) {
                 genres_in_queue.insert(track_info.genre.clone());
             }
         }
@@ -495,7 +519,6 @@ impl QueueCommands {
             .iter()
             .filter(|q_track| {
                 soundeo_info
-                    .tracks_info
                     .get(&q_track.track_id)
                     .map_or(false, |info| &info.genre == selected_genre)
             })
@@ -512,7 +535,7 @@ impl QueueCommands {
     }
 
     async fn prioritize_by_artist() -> QueueResult<()> {
-        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let soundeo_info = DjWizardLog::get_soundeo_tracks_info().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
         if queued_tracks.is_empty() {
@@ -627,7 +650,6 @@ impl QueueCommands {
                 .iter()
                 .filter(|q_track| {
                     soundeo_info
-                        .tracks_info
                         .get(&q_track.track_id)
                         .map_or(false, |info| {
                             info.title
@@ -663,7 +685,6 @@ impl QueueCommands {
             .iter()
             .map(|q_track| {
                 soundeo_info
-                    .tracks_info
                     .get(&q_track.track_id)
                     .map_or_else(|| "Unknown Track".to_string(), |info| info.title.clone())
             })
@@ -791,7 +812,7 @@ impl QueueCommands {
         );
 
         // 1. Get all necessary data from the log
-        let soundeo_log = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
         if queued_tracks.is_empty() {
@@ -806,7 +827,7 @@ impl QueueCommands {
 
         // 2. Iterate and remove
         for queued_track in queued_tracks {
-            if let Some(track_info) = soundeo_log.tracks_info.get(&queued_track.track_id) {
+            if let Some(track_info) = soundeo_tracks_info.get(&queued_track.track_id) {
                 if track_info.already_downloaded {
                     if DjWizardLog::remove_queued_track(queued_track.track_id.clone())
                         .change_context(QueueError)?
