@@ -32,8 +32,6 @@ impl GoogleAuth {
     pub async fn refresh_token(refresh_token: &str) -> AuthResult<AuthToken> {
         let client = Self::create_oauth_client()?;
         
-        println!("🔄 Refreshing access token automatically...");
-        
         let token_result = client
             .exchange_refresh_token(&oauth2::RefreshToken::new(refresh_token.to_string()))
             .request_async(async_http_client)
@@ -69,7 +67,6 @@ impl GoogleAuth {
         let google_auth = GoogleAuth::new();
         google_auth.save_token(&auth_token)?;
         
-        println!("✅ Token refreshed successfully (no browser required)");
         Ok(auth_token)
     }
     

@@ -43,17 +43,12 @@ impl FirebaseClient {
         // Check if token expires within 5 minutes
         let expires_soon = self.token_expires_at - chrono::Duration::minutes(5);
         if chrono::Utc::now() > expires_soon {
-            println!("🔄 Token expiring soon, refreshing authentication...");
-            
             let new_token = if let Some(ref refresh_token) = self.refresh_token {
                 // Try automatic refresh first
                 match GoogleAuth::refresh_token(refresh_token).await {
-                    Ok(token) => {
-                        println!("✅ Token refreshed automatically");
-                        token
-                    }
-                    Err(e) => {
-                        println!("⚠️ Automatic refresh failed: {}, falling back to browser login", e);
+                    Ok(token) => token,
+                    Err(_) => {
+                        println!("🌐 Opening browser for authentication...");
                         GoogleAuth::new()
                             .login()
                             .await
@@ -62,7 +57,7 @@ impl FirebaseClient {
                 }
             } else {
                 // No refresh token, do full login
-                println!("🌐 No refresh token available, opening browser for login...");
+                println!("🌐 Opening browser for authentication...");
                 GoogleAuth::new()
                     .login()
                     .await
@@ -669,6 +664,11 @@ impl FirebaseClient {
             return Err(AuthError::new(&format!("Firestore batch write error: {}", error_text)).into());
         }
 
+        // Mark all tracks in the batch as migrated
+        for (track_id, _) in tracks {
+            let _ = crate::log::DjWizardLog::mark_track_as_migrated(track_id);
+        }
+
         Ok(())
     }
 
@@ -678,14 +678,128 @@ impl FirebaseClient {
         
         let total = queued_tracks.len();
         let start_time = std::time::Instant::now();
-        let mut completed = 0;
-        let mut failed = 0;
+        let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let failed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let processed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         
-        for (index, track) in queued_tracks.iter().enumerate() {
-            // Check token every 100 tracks
-            if index % 100 == 0 {
-                self.ensure_valid_token().await?;
-            }
+        let concurrent_batches = 2;
+        
+        // Initialize status display - statistics line + worker lines
+        println!("📋 Queue: 0/{} | ✅ 0 ❌ 0 | ⏱️ 0s | 🚀 0.0/min | ⏳ ∞", total);
+        for i in 0..concurrent_batches {
+            println!("Batch Thread {}: Waiting...", i);
+        }
+        
+        // Share start time for rate calculation
+        let start_time = std::sync::Arc::new(start_time);
+        
+        // Convert to shared queue
+        let tracks_queue = std::sync::Arc::new(tokio::sync::Mutex::new(queued_tracks.to_vec()));
+        
+        // Spawn 2 worker threads
+        let mut tasks = Vec::new();
+        for thread_id in 0..concurrent_batches {
+            let tracks_queue = tracks_queue.clone();
+            let client = self.client.clone();
+            let access_token = self.access_token.clone();
+            let user_id = self.user_id.clone();
+            let firestore_url = self.firestore_url();
+            let completed_clone = completed.clone();
+            let failed_clone = failed.clone();
+            let processed_clone = processed.clone();
+            let start_time_clone = start_time.clone();
+            
+            let task = tokio::spawn(async move {
+                // Small delay to stagger worker startup
+                if thread_id > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                }
+                Self::process_queue_worker(
+                    tracks_queue,
+                    client, 
+                    access_token, 
+                    user_id, 
+                    firestore_url,
+                    completed_clone,
+                    failed_clone,
+                    processed_clone,
+                    thread_id,
+                    start_time_clone,
+                    total
+                ).await
+            });
+            
+            tasks.push(task);
+        }
+        
+        // Wait for all workers to complete
+        for task in tasks {
+            let _ = task.await;
+        }
+        
+        // Check token periodically during processing
+        self.ensure_valid_token().await?;
+        
+        
+        // Move cursor to statistics line for final update
+        print!("\x1B[{}A", concurrent_batches);
+        let final_elapsed = start_time.elapsed();
+        let final_completed = completed.load(std::sync::atomic::Ordering::Relaxed);
+        let final_failed = failed.load(std::sync::atomic::Ordering::Relaxed);
+        let final_rate = if final_elapsed.as_secs() > 0 {
+            (final_completed as f64 / final_elapsed.as_secs_f64()) * 60.0
+        } else {
+            0.0
+        };
+        
+        print!("\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ✅ Complete!", 
+                 total, total, final_completed, final_failed, final_elapsed, final_rate);
+        print!("\x1B[{}B", concurrent_batches);
+        println!();
+        
+        if final_failed > 0 {
+            return Err(AuthError::new(&format!("Migration completed with {} failures", final_failed)).into());
+        }
+        
+        Ok(())
+    }
+    
+    async fn process_queue_worker(
+        tracks_queue: std::sync::Arc<tokio::sync::Mutex<Vec<crate::log::QueuedTrack>>>,
+        client: reqwest::Client,
+        access_token: String,
+        user_id: String,
+        firestore_url: String,
+        completed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        failed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        processed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        thread_id: usize,
+        start_time: std::sync::Arc<std::time::Instant>,
+        total: usize,
+    ) {
+        let concurrent_batches = 2;
+        
+        loop {
+            // Get next track from queue (quick lock/unlock)
+            let track = {
+                let mut queue = tracks_queue.lock().await;
+                queue.pop()
+            };
+            
+            let Some(track) = track else {
+                // No more tracks, show waiting
+                print!("\x1B[{}A", concurrent_batches - thread_id);
+                print!("\x1B[2K\rBatch Thread {}: Waiting...", thread_id);
+                print!("\x1B[{}B", concurrent_batches - thread_id);
+                std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                break;
+            };
+            
+            // Show processing this track
+            print!("\x1B[{}A", concurrent_batches - thread_id);
+            print!("\x1B[2K\rBatch Thread {}: Processing {}", thread_id, track.track_id);
+            print!("\x1B[{}B", concurrent_batches - thread_id);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
             
             let priority_name = match track.priority {
                 crate::log::Priority::High => "high",
@@ -695,36 +809,12 @@ impl FirebaseClient {
             
             let url = format!(
                 "{}/users/{}/queued_tracks/{}",
-                self.firestore_url(), self.user_id, track.track_id
+                firestore_url, user_id, track.track_id
             );
             
-            // Update stats line
-            let elapsed = start_time.elapsed();
-            let processed = completed + failed;
-            let rate = if elapsed.as_secs() > 0 {
-                (completed as f64 / elapsed.as_secs_f64()) * 60.0
-            } else {
-                0.0
-            };
-            let eta = if rate > 0.0 {
-                let remaining = total - processed;
-                let minutes_remaining = remaining as f64 / rate;
-                if minutes_remaining < 60.0 {
-                    format!("{:.0}m", minutes_remaining)
-                } else {
-                    format!("{:.1}h", minutes_remaining / 60.0)
-                }
-            } else {
-                "∞".to_string()
-            };
-            
-            print!("\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ⏳ {}", 
-                   processed, total, completed, failed, elapsed, rate, eta);
-            std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
-            
-            let result = self.client
+            let result = client
                 .patch(&url)
-                .bearer_auth(&self.access_token)
+                .bearer_auth(&access_token)
                 .query(&[("updateMask.fieldPaths", "track_id"), ("updateMask.fieldPaths", "order_key"), ("updateMask.fieldPaths", "priority")])
                 .json(&serde_json::json!({
                     "fields": {
@@ -738,32 +828,47 @@ impl FirebaseClient {
                 
             match result {
                 Ok(response) if response.status().is_success() => {
-                    completed += 1;
-                    // Mark track as migrated in local JSON
+                    completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let _ = crate::log::DjWizardLog::mark_queued_track_as_migrated(&track.track_id);
                 }
                 Ok(_) | Err(_) => {
-                    failed += 1;
+                    failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
+            
+            processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            
+            // Update statistics after each track
+            let elapsed = start_time.elapsed();
+            let current_processed = processed.load(std::sync::atomic::Ordering::Relaxed);
+            let current_completed = completed.load(std::sync::atomic::Ordering::Relaxed);
+            let current_failed = failed.load(std::sync::atomic::Ordering::Relaxed);
+            
+            let rate = if elapsed.as_secs() > 0 {
+                (current_completed as f64 / elapsed.as_secs_f64()) * 60.0
+            } else {
+                0.0
+            };
+            
+            let eta = if rate > 0.0 {
+                let remaining = total - current_processed;
+                let minutes_remaining = remaining as f64 / rate;
+                if minutes_remaining < 60.0 {
+                    format!("{:.0}m", minutes_remaining)
+                } else {
+                    format!("{:.1}h", minutes_remaining / 60.0)
+                }
+            } else {
+                "∞".to_string()
+            };
+            
+            // Update statistics line (move up 2 lines, update, move back down)
+            print!("\x1B[{}A", concurrent_batches);
+            print!("\x1B[2K\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ⏳ {}", 
+                   current_processed, total, current_completed, current_failed, elapsed, rate, eta);
+            print!("\x1B[{}B", concurrent_batches);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
         }
-        
-        // Final stats
-        let final_elapsed = start_time.elapsed();
-        let final_rate = if final_elapsed.as_secs() > 0 {
-            (completed as f64 / final_elapsed.as_secs_f64()) * 60.0
-        } else {
-            0.0
-        };
-        
-        println!("\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ✅ Complete!", 
-                 total, total, completed, failed, final_elapsed, final_rate);
-        
-        if failed > 0 {
-            return Err(AuthError::new(&format!("Migration completed with {} failures", failed)).into());
-        }
-        
-        Ok(())
     }
 
 }
