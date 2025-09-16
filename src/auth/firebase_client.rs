@@ -313,31 +313,46 @@ impl FirebaseClient {
 
     /// Get all soundeo tracks from Firebase
     pub async fn get_all_soundeo_tracks(&self) -> Result<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
-        let collection_url = format!(
-            "{}/users/{}/soundeo_tracks",
-            self.firestore_url(),
-            urlencoding::encode(&self.user_id)
-        );
-        
-        let response = self.client.get(&collection_url).bearer_auth(&self.access_token).send().await?;
-        
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(std::collections::HashMap::new());
-        }
-        
-        let firestore_response: Value = response.json().await?;
         let mut tracks_map = std::collections::HashMap::new();
+        let mut page_token: Option<String> = None;
         
-        if let Some(documents) = firestore_response.get("documents") {
-            if let Value::Array(docs) = documents {
-                for doc in docs {
-                    if let Some(fields) = doc.get("fields") {
-                        let track_value = self.convert_firestore_fields_to_value(fields);
-                        if let Ok(track) = serde_json::from_value::<crate::soundeo::track::SoundeoTrack>(track_value) {
-                            tracks_map.insert(track.id.clone(), track);
+        loop {
+            let mut collection_url = format!(
+                "{}/users/{}/soundeo_tracks?pageSize=1000",
+                self.firestore_url(),
+                urlencoding::encode(&self.user_id)
+            );
+            
+            if let Some(token) = &page_token {
+                collection_url.push_str(&format!("&pageToken={}", token));
+            }
+            
+            let response = self.client.get(&collection_url).bearer_auth(&self.access_token).send().await?;
+            
+            if response.status() == StatusCode::NOT_FOUND {
+                break;
+            }
+            
+            let firestore_response: Value = response.json().await?;
+            
+            if let Some(documents) = firestore_response.get("documents") {
+                if let Value::Array(docs) = documents {
+                    for doc in docs {
+                        if let Some(fields) = doc.get("fields") {
+                            let track_value = self.convert_firestore_fields_to_value(fields);
+                            if let Ok(track) = serde_json::from_value::<crate::soundeo::track::SoundeoTrack>(track_value) {
+                                tracks_map.insert(track.id.clone(), track);
+                            }
                         }
                     }
                 }
+            }
+            
+            // Check if there's a next page
+            if let Some(next_page_token) = firestore_response.get("nextPageToken").and_then(|t| t.as_str()) {
+                page_token = Some(next_page_token.to_string());
+            } else {
+                break; // No more pages
             }
         }
         
@@ -518,6 +533,66 @@ impl FirebaseClient {
         }
         
         Ok(())
+    }
+
+    /// Get all URLs from url_list collection with pagination
+    pub async fn get_all_url_list_from_collection(&self) -> AuthResult<std::collections::HashSet<String>> {
+        let mut url_set = std::collections::HashSet::new();
+        let mut page_token: Option<String> = None;
+        
+        loop {
+            let mut url = self.get_collection_path("url_list");
+            url.push_str("?pageSize=1000"); // Request up to 1000 documents per page
+            
+            if let Some(token) = &page_token {
+                url.push_str(&format!("&pageToken={}", token));
+            }
+
+            let response = self
+                .client
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("Failed to get url_list collection: {}", e)))?;
+
+            match response.status().as_u16() {
+                200 => {
+                    let firestore_response: serde_json::Value = response.json().await.map_err(|e| {
+                        AuthError::new(&format!("Failed to parse url_list response: {}", e))
+                    })?;
+
+                    if let Some(documents) = firestore_response["documents"].as_array() {
+                        for doc in documents {
+                            if let Some(fields) = doc["fields"].as_object() {
+                                if let Some(url_field) = fields.get("url") {
+                                    if let Some(url_value) = url_field["stringValue"].as_str() {
+                                        url_set.insert(url_value.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check if there's a next page
+                    if let Some(next_page_token) = firestore_response["nextPageToken"].as_str() {
+                        page_token = Some(next_page_token.to_string());
+                    } else {
+                        break; // No more pages
+                    }
+                }
+                404 => break, // No documents found
+                _ => {
+                    let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+                    return Err(
+                        AuthError::new(&format!("Failed to get url_list collection: {}", error_text))
+                            .into(),
+                    );
+                }
+            }
+        }
+
+        Ok(url_set)
     }
 
     /// Get genre_tracker data from dj_wizard_data
