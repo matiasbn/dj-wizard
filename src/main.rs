@@ -105,6 +105,9 @@ enum DjWizardCommands {
         /// Migrate tracks as individual documents for O(1) access (super fast)
         #[clap(long)]
         individual_tracks: bool,
+        /// Migrate queue to priority-based subcollections structure
+        #[clap(long)]
+        queue_subcollections: bool,
     },
 }
 
@@ -263,6 +266,7 @@ impl DjWizardCommands {
                 soundeo,
                 remaining,
                 individual_tracks,
+                queue_subcollections,
             } => {
                 use crate::auth::firebase_client::FirebaseClient;
                 use crate::auth::google_auth::GoogleAuth;
@@ -291,7 +295,7 @@ impl DjWizardCommands {
                 };
 
                 // Create Firebase client
-                let firebase_client = FirebaseClient::new(auth_token)
+                let mut firebase_client = FirebaseClient::new(auth_token)
                     .await
                     .change_context(DjWizardError)?;
 
@@ -803,6 +807,37 @@ impl DjWizardCommands {
                     return Ok(());
                 }
 
+                if *queue_subcollections {
+                    // Queue subcollections migration mode
+                    println!("📋 Queue subcollections mode: Migrating to priority-based structure...");
+
+                    // Read current queue from DjWizardLog
+                    use crate::log::DjWizardLog;
+                    let all_queued_tracks = DjWizardLog::get_queued_tracks().change_context(DjWizardError)?;
+                    
+                    // Filter only non-migrated tracks
+                    let queued_tracks: Vec<_> = all_queued_tracks
+                        .into_iter()
+                        .filter(|track| !track.migrated)
+                        .collect();
+                    
+                    if queued_tracks.is_empty() {
+                        println!("ℹ️  No pending queued tracks found to migrate (all already migrated)");
+                        return Ok(());
+                    }
+                    
+                    println!("📊 Found {} pending queued tracks to migrate", queued_tracks.len());
+                    
+                    // Migrate to subcollections
+                    firebase_client
+                        .migrate_queue_to_subcollections(&queued_tracks)
+                        .await
+                        .change_context(DjWizardError)?;
+                    
+                    println!("🎉 Queue successfully migrated to priority-based subcollections!");
+                    return Ok(());
+                }
+
                 if *remaining {
                     // Special mode: add any remaining fields to existing document
                     println!("📦 Remaining fields mode: Adding all missing fields...");
@@ -953,6 +988,7 @@ impl DjWizardCommands {
                 soundeo,
                 remaining,
                 individual_tracks,
+                queue_subcollections,
             } => {
                 let mut cmd = "dj-wizard migrate".to_string();
                 if let Some(log_path) = soundeo_log {

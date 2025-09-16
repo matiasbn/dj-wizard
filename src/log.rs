@@ -45,6 +45,8 @@ pub struct QueuedTrack {
     pub priority: Priority,
     pub order_key: f64,
     pub added_at: u64,
+    #[serde(default)]
+    pub migrated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,6 +253,7 @@ impl DjWizardLog {
                 1.0
             },
             added_at: log.last_update,
+            migrated: false,
         };
         log.queued_tracks.push(new_track);
         log.save_log()?;
@@ -399,6 +402,23 @@ impl DjWizardLog {
             .soundeo_track_ids
             .extend(new_pairs.iter().map(|(k, v)| (k.clone(), v.clone())));
         log.save_log()?;
+        Ok(())
+    }
+
+    /// Mark a queued track as migrated
+    pub fn mark_queued_track_as_migrated(track_id: &str) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        
+        if let Some(track) = log.queued_tracks.iter_mut().find(|t| t.track_id == track_id) {
+            track.migrated = true;
+            log.last_update = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .into_report()
+                .change_context(DjWizardLogError)?
+                .as_secs();
+            log.save_log()?;
+        }
+        
         Ok(())
     }
 }

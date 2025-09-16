@@ -12,6 +12,7 @@ pub struct FirebaseClient {
     project_id: String,
     user_id: String,
     access_token: String,
+    token_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl FirebaseClient {
@@ -21,6 +22,7 @@ impl FirebaseClient {
             project_id: AppConfig::FIREBASE_PROJECT_ID.to_string(),
             user_id: auth_token.user_id,
             access_token: auth_token.access_token,
+            token_expires_at: auth_token.expires_at,
         })
     }
 
@@ -30,6 +32,29 @@ impl FirebaseClient {
             "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents",
             self.project_id
         )
+    }
+
+    /// Ensure token is valid, refresh if needed
+    async fn ensure_valid_token(&mut self) -> AuthResult<()> {
+        use crate::auth::google_auth::GoogleAuth;
+        
+        // Check if token expires within 5 minutes
+        let expires_soon = self.token_expires_at - chrono::Duration::minutes(5);
+        if chrono::Utc::now() > expires_soon {
+            println!("🔄 Token expiring soon, refreshing authentication...");
+            
+            let new_token = GoogleAuth::new()
+                .login()
+                .await
+                .map_err(|_| AuthError::new("Failed to refresh token"))?;
+            
+            self.access_token = new_token.access_token;
+            self.token_expires_at = new_token.expires_at;
+            
+            println!("✅ Token refreshed successfully");
+        }
+        
+        Ok(())
     }
 
     /// Get the collection path for the current user
@@ -563,7 +588,9 @@ impl FirebaseClient {
     }
 
     /// Batch write multiple tracks (up to 500 per batch for optimal performance)
-    pub async fn batch_write_tracks(&self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
+    pub async fn batch_write_tracks(&mut self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
+        self.ensure_valid_token().await?;
+        
         if tracks.is_empty() {
             return Ok(());
         }
@@ -587,17 +614,15 @@ impl FirebaseClient {
                 self.project_id, user_id, track_id
             );
 
-            // Convert track to Firestore fields format
-            let track_json = serde_json::to_value(track)
-                .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
-            
-            let fields = if let Value::Object(obj) = &track_json {
-                obj.iter()
-                    .map(|(k, v)| (k.clone(), self.convert_to_firestore_value(v)))
-                    .collect::<serde_json::Map<String, Value>>()
-            } else {
-                return Err(AuthError::new("Track data is not a JSON object").into());
-            };
+            // Only include essential fields for Firebase
+            let mut fields = serde_json::Map::new();
+            fields.insert("id".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.id.clone())));
+            fields.insert("title".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.title.clone())));
+            fields.insert("track_url".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.track_url.clone())));
+            fields.insert("date".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.date.clone())));
+            fields.insert("genre".to_string(), self.convert_to_firestore_value(&serde_json::Value::String(track.genre.clone())));
+            fields.insert("downloadable".to_string(), self.convert_to_firestore_value(&serde_json::Value::Bool(track.downloadable)));
+            fields.insert("already_downloaded".to_string(), self.convert_to_firestore_value(&serde_json::Value::Bool(track.already_downloaded)));
 
             writes.push(serde_json::json!({
                 "update": {
@@ -624,6 +649,99 @@ impl FirebaseClient {
             return Err(AuthError::new(&format!("Firestore batch write error: {}", error_text)).into());
         }
 
+        Ok(())
+    }
+
+    /// Migrate queue tracks to priority-based subcollections
+    pub async fn migrate_queue_to_subcollections(&mut self, queued_tracks: &[crate::log::QueuedTrack]) -> AuthResult<()> {
+        self.ensure_valid_token().await?;
+        let total = queued_tracks.len();
+        let start_time = std::time::Instant::now();
+        let mut completed = 0;
+        let mut failed = 0;
+        
+        for (index, track) in queued_tracks.iter().enumerate() {
+            // Check token every 100 tracks or if this is the first track
+            if index == 0 || index % 100 == 0 {
+                self.ensure_valid_token().await?;
+            }
+            
+            let priority_name = match track.priority {
+                crate::log::Priority::High => "high",
+                crate::log::Priority::Normal => "normal", 
+                crate::log::Priority::Low => "low",
+            };
+            
+            let url = format!(
+                "{}/users/{}/queued_tracks/{}",
+                self.firestore_url(), self.user_id, track.track_id
+            );
+            
+            // Update stats line
+            let elapsed = start_time.elapsed();
+            let processed = completed + failed;
+            let rate = if elapsed.as_secs() > 0 {
+                (completed as f64 / elapsed.as_secs_f64()) * 60.0
+            } else {
+                0.0
+            };
+            let eta = if rate > 0.0 {
+                let remaining = total - processed;
+                let minutes_remaining = remaining as f64 / rate;
+                if minutes_remaining < 60.0 {
+                    format!("{:.0}m", minutes_remaining)
+                } else {
+                    format!("{:.1}h", minutes_remaining / 60.0)
+                }
+            } else {
+                "∞".to_string()
+            };
+            
+            print!("\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ⏳ {}", 
+                   processed, total, completed, failed, elapsed, rate, eta);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+            
+            let result = self.client
+                .patch(&url)
+                .bearer_auth(&self.access_token)
+                .query(&[("updateMask.fieldPaths", "track_id"), ("updateMask.fieldPaths", "order_key"), ("updateMask.fieldPaths", "priority")])
+                .json(&serde_json::json!({
+                    "fields": {
+                        "track_id": {"stringValue": track.track_id},
+                        "order_key": {"doubleValue": track.order_key},
+                        "priority": {"stringValue": priority_name}
+                    }
+                }))
+                .send()
+                .await;
+                
+            match result {
+                Ok(response) if response.status().is_success() => {
+                    completed += 1;
+                    // Mark track as migrated in local JSON
+                    let _ = crate::log::DjWizardLog::mark_queued_track_as_migrated(&track.track_id);
+                }
+                Ok(_) | Err(_) => {
+                    failed += 1;
+                }
+            }
+        }
+        
+        // Final stats
+        let final_elapsed = start_time.elapsed();
+        let final_rate = if final_elapsed.as_secs() > 0 {
+            (completed as f64 / final_elapsed.as_secs_f64()) * 60.0
+        } else {
+            0.0
+        };
+        
+        println!("\r📋 Queue: {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 🚀 {:.1}/min | ✅ Complete!", 
+                 total, total, completed, failed, final_elapsed, final_rate);
+        
+        if failed > 0 {
+            return Err(AuthError::new(&format!("Migration completed with {} failures", failed)).into());
+        }
+        
         Ok(())
     }
 
