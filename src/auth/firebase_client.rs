@@ -1593,7 +1593,8 @@ impl FirebaseClient {
     pub async fn get_available_tracks(&self) -> AuthResult<std::collections::HashSet<String>> {
         let url = self.get_collection_path("available_tracks");
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .bearer_auth(&self.access_token)
             .send()
@@ -1602,11 +1603,12 @@ impl FirebaseClient {
 
         match response.status().as_u16() {
             200 => {
-                let firestore_response: serde_json::Value = response.json().await
-                    .map_err(|e| AuthError::new(&format!("Failed to parse available tracks response: {}", e)))?;
+                let firestore_response: serde_json::Value = response.json().await.map_err(|e| {
+                    AuthError::new(&format!("Failed to parse available tracks response: {}", e))
+                })?;
 
                 let mut available_tracks = std::collections::HashSet::new();
-                
+
                 if let Some(documents) = firestore_response["documents"].as_array() {
                     for doc in documents {
                         if let Some(name) = doc["name"].as_str() {
@@ -1618,13 +1620,16 @@ impl FirebaseClient {
                         }
                     }
                 }
-                
+
                 Ok(available_tracks)
             }
             404 => Ok(std::collections::HashSet::new()), // No documents found
             _ => {
                 let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-                Err(AuthError::new(&format!("Failed to get available tracks: {}", error_text)).into())
+                Err(
+                    AuthError::new(&format!("Failed to get available tracks: {}", error_text))
+                        .into(),
+                )
             }
         }
     }
@@ -1644,7 +1649,8 @@ impl FirebaseClient {
             }
         });
 
-        let response = self.client
+        let response = self
+            .client
             .patch(&url)
             .bearer_auth(&self.access_token)
             .json(&document_data)
@@ -1664,7 +1670,8 @@ impl FirebaseClient {
     pub async fn remove_available_track(&self, track_id: &str) -> AuthResult<bool> {
         let url = self.get_document_path("available_tracks", track_id);
 
-        let response = self.client
+        let response = self
+            .client
             .delete(&url)
             .bearer_auth(&self.access_token)
             .send()
