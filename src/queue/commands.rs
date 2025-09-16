@@ -282,19 +282,7 @@ impl QueueCommands {
     }
 
     pub async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
-        // If the resume queue flag is provided, skip the dialog to filter by genre
-        // since we need complete automation
-        let filtered_by_genre = if resume_queue_flag {
-            false
-        } else {
-            Dialoguer::select_yes_or_no("Do you want to filter by genre".to_string())
-                .change_context(QueueError)?
-        };
-        let mut queued_tracks = if filtered_by_genre {
-            Self::filter_queue()?
-        } else {
-            DjWizardLog::get_queued_tracks().change_context(QueueError)?
-        };
+        let mut queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
 
         // Sort the queue by priority and then by order_key
         queued_tracks.sort_by(|a, b| {
@@ -447,33 +435,6 @@ impl QueueCommands {
         Ok(())
     }
 
-    fn filter_queue() -> QueueResult<Vec<QueuedTrack>> {
-        let Soundeo { tracks_info, .. } = DjWizardLog::get_soundeo().change_context(QueueError)?;
-        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
-
-        let mut genres_hash_set = HashSet::new();
-        for q_track in &queued_tracks {
-            if let Some(track_info) = tracks_info.get(&q_track.track_id) {
-                genres_hash_set.insert(track_info.genre.clone());
-            }
-        }
-
-        let mut genres = genres_hash_set.into_iter().collect::<Vec<String>>();
-        genres.sort();
-        let selection = Dialoguer::select("Select the genre".to_string(), genres.clone(), None)
-            .change_context(QueueError)?;
-        let selected_genre = &genres[selection];
-
-        let selected_tracks = queued_tracks
-            .into_iter()
-            .filter(|q_track| {
-                tracks_info
-                    .get(&q_track.track_id)
-                    .map_or(false, |info| &info.genre == selected_genre)
-            })
-            .collect();
-        Ok(selected_tracks)
-    }
 
     async fn manage_queue() -> QueueResult<()> {
         let options = vec![
