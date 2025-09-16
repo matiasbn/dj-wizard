@@ -1832,47 +1832,62 @@ impl FirebaseClient {
 
     /// Get available tracks from Firebase
     pub async fn get_available_tracks(&self) -> AuthResult<std::collections::HashSet<String>> {
-        let url = self.get_collection_path("available_tracks");
+        let mut available_tracks = std::collections::HashSet::new();
+        let mut page_token: Option<String> = None;
+        
+        loop {
+            let mut url = self.get_collection_path("available_tracks");
+            url.push_str("?pageSize=1000"); // Request up to 1000 documents per page
+            
+            if let Some(token) = &page_token {
+                url.push_str(&format!("&pageToken={}", token));
+            }
 
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .send()
-            .await
-            .map_err(|e| AuthError::new(&format!("Failed to get available tracks: {}", e)))?;
+            let response = self
+                .client
+                .get(&url)
+                .bearer_auth(&self.access_token)
+                .send()
+                .await
+                .map_err(|e| AuthError::new(&format!("Failed to get available tracks: {}", e)))?;
 
-        match response.status().as_u16() {
-            200 => {
-                let firestore_response: serde_json::Value = response.json().await.map_err(|e| {
-                    AuthError::new(&format!("Failed to parse available tracks response: {}", e))
-                })?;
+            match response.status().as_u16() {
+                200 => {
+                    let firestore_response: serde_json::Value = response.json().await.map_err(|e| {
+                        AuthError::new(&format!("Failed to parse available tracks response: {}", e))
+                    })?;
 
-                let mut available_tracks = std::collections::HashSet::new();
-
-                if let Some(documents) = firestore_response["documents"].as_array() {
-                    for doc in documents {
-                        if let Some(name) = doc["name"].as_str() {
-                            // Extract track_id from document name
-                            let track_id = name.split('/').last().unwrap_or("").to_string();
-                            if !track_id.is_empty() {
-                                available_tracks.insert(track_id);
+                    if let Some(documents) = firestore_response["documents"].as_array() {
+                        for doc in documents {
+                            if let Some(name) = doc["name"].as_str() {
+                                // Extract track_id from document name
+                                let track_id = name.split('/').last().unwrap_or("").to_string();
+                                if !track_id.is_empty() {
+                                    available_tracks.insert(track_id);
+                                }
                             }
                         }
                     }
-                }
 
-                Ok(available_tracks)
-            }
-            404 => Ok(std::collections::HashSet::new()), // No documents found
-            _ => {
-                let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-                Err(
-                    AuthError::new(&format!("Failed to get available tracks: {}", error_text))
-                        .into(),
-                )
+                    // Check if there's a next page
+                    if let Some(next_page_token) = firestore_response["nextPageToken"].as_str() {
+                        page_token = Some(next_page_token.to_string());
+                    } else {
+                        break; // No more pages
+                    }
+                }
+                404 => break, // No documents found
+                _ => {
+                    let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+                    return Err(
+                        AuthError::new(&format!("Failed to get available tracks: {}", error_text))
+                            .into(),
+                    );
+                }
             }
         }
+
+        Ok(available_tracks)
     }
 
     /// Add track to available tracks in Firebase

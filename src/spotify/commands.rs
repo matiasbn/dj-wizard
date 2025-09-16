@@ -149,7 +149,6 @@ impl SpotifyCommands {
                 // Condition: Not in queue AND not already downloaded
                 !queued_ids.contains(*soundeo_id)
                     && soundeo_tracks_info
-                        .tracks_info
                         .get(*soundeo_id)
                         .map_or(true, |info| !info.already_downloaded)
             })
@@ -639,7 +638,6 @@ impl SpotifyCommands {
             .iter()
             .filter(|soundeo_id| {
                 soundeo_tracks_info
-                    .tracks_info
                     .get(*soundeo_id)
                     .map_or(true, |track_info| !track_info.already_downloaded)
             })
@@ -713,7 +711,6 @@ impl SpotifyCommands {
             .collect::<Vec<_>>();
         let soundeo = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
         let mut downloaded_tracks = soundeo
-            .tracks_info
             .into_iter()
             .filter(|(soundeo_track_id, _)| {
                 spotify_mapped_tracks.contains(&soundeo_track_id.clone())
@@ -938,7 +935,6 @@ impl SpotifyCommands {
                     Some(Some(soundeo_id)) => {
                         // Successfully paired, now check its status
                         if soundeo_tracks_info
-                            .tracks_info
                             .get(soundeo_id)
                             .map_or(false, |info| info.already_downloaded)
                         {
@@ -1542,7 +1538,7 @@ impl SpotifyCommands {
                     .soundeo_track_ids
                     .get(&spotify_track.spotify_track_id)
                 {
-                    if let Some(soundeo_track) = soundeo_tracks_info.tracks_info.get(soundeo_id) {
+                    if let Some(soundeo_track) = soundeo_tracks_info.get(soundeo_id) {
                         let expected_filename = format!("{}.AIFF", soundeo_track.title);
 
                         if let Some(source_path) = local_files.get(&expected_filename) {
