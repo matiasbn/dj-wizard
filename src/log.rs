@@ -181,71 +181,9 @@ impl DjWizardLog {
                 .into_report()
                 .change_context(DjWizardLogError)?;
 
-            // Attempt to deserialize into the new format first. If it works, we're done.
-            if let Ok(log) = serde_json::from_str::<Self>(&log_content) {
-                return Ok(log);
-            }
-
-            // If that failed, it's likely the old format. Let's try to migrate.
-            println!(
-                "{}",
-                "Old log format detected. Attempting to migrate queue automatically...".yellow()
-            );
-
-            // Use serde_json::Value to inspect the structure without crashing.
-            let mut json_value: Value = serde_json::from_str(&log_content)
+            serde_json::from_str::<Self>(&log_content)
                 .into_report()
-                .change_context(DjWizardLogError)?;
-
-            let mut migration_performed = false;
-            // Check if `queued_tracks` is an array of strings (the old format)
-            if let Some(queue_value) = json_value.get_mut("queued_tracks") {
-                if queue_value.is_array()
-                    && queue_value
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|v| v.is_string())
-                {
-                    let old_queue: HashSet<String> = serde_json::from_value(queue_value.clone())
-                        .into_report()
-                        .change_context(DjWizardLogError)?;
-
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .into_report()
-                        .change_context(DjWizardLogError)?
-                        .as_secs();
-
-                    let new_queue: Vec<QueuedTrack> = old_queue
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, track_id)| QueuedTrack {
-                            track_id,
-                            priority: Priority::Normal, // Default priority
-                            order_key: i as f64,        // Preserve some order
-                            added_at: now,
-                        })
-                        .collect();
-
-                    *queue_value = serde_json::to_value(new_queue)
-                        .into_report()
-                        .change_context(DjWizardLogError)?;
-                    migration_performed = true;
-                }
-            }
-
-            let log: Self = serde_json::from_value(json_value).into_report().attach_printable("Failed to deserialize log file after attempting migration. The log file might be corrupted.").change_context(DjWizardLogError)?;
-
-            if migration_performed {
-                log.save_log()?;
-                println!(
-                    "{}",
-                    "Migration successful! Your queue has been updated to the new prioritized format."
-                        .green()
-                );
-            }
-            log
+                .change_context(DjWizardLogError)?
         } else {
             Self {
                 last_update: 0,
