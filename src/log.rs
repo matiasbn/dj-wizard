@@ -90,8 +90,19 @@ impl DjWizardLog {
     }
 
     pub fn get_available_tracks() -> DjWizardLogResult<HashSet<String>> {
-        let log = Self::read_log()?;
-        Ok(log.available_tracks)
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Get available tracks from Firebase
+                firebase_client.get_available_tracks().await.map_err(|_| "Failed to get available tracks from Firebase")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)    
     }
 
     pub fn get_spotify() -> DjWizardLogResult<Spotify> {
@@ -339,15 +350,19 @@ impl DjWizardLog {
     }
 
     pub fn add_available_track(track_id: String) -> DjWizardLogResult<bool> {
-        let mut log = Self::read_log()?;
-        log.last_update = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .into_report()
-            .change_context(DjWizardLogError)?
-            .as_secs();
-        let result = log.available_tracks.insert(track_id);
-        log.save_log()?;
-        Ok(result)
+        // Use Firebase only - no fallback to local
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Add track to Firebase available tracks
+                firebase_client.add_available_track(&track_id).await.map_err(|_| "Failed to add track to Firebase")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)    
     }
 
     pub fn remove_available_track(track_id: String) -> DjWizardLogResult<bool> {

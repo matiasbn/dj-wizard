@@ -331,6 +331,18 @@ impl FirebaseClient {
         Ok(())
     }
 
+    /// Load artist manager from Firestore
+    pub async fn load_artists(&self) -> AuthResult<Option<ArtistManager>> {
+        match self.get_document("artists", "favorite_artists").await? {
+            Some(data) => {
+                let artist_manager: ArtistManager = serde_json::from_value(data)
+                    .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
+                Ok(Some(artist_manager))
+            }
+            None => Ok(None),
+        }
+    }
+
     // Genre Tracker CRUD operations
 
     /// Save genre tracker to Firestore
@@ -367,7 +379,6 @@ impl FirebaseClient {
         println!("✅ Genre tracker data saved to dj_wizard_data successfully!");
         Ok(())
     }
-
 
     /// Add or update a specific tracked genre
     pub async fn save_tracked_genre(
@@ -1576,5 +1587,97 @@ impl FirebaseClient {
 
         println!("✅ dj_wizard_data document created successfully!");
         Ok(())
+    }
+
+    /// Get available tracks from Firebase
+    pub async fn get_available_tracks(&self) -> AuthResult<std::collections::HashSet<String>> {
+        let url = self.get_collection_path("available_tracks");
+
+        let response = self.client
+            .get(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to get available tracks: {}", e)))?;
+
+        match response.status().as_u16() {
+            200 => {
+                let firestore_response: serde_json::Value = response.json().await
+                    .map_err(|e| AuthError::new(&format!("Failed to parse available tracks response: {}", e)))?;
+
+                let mut available_tracks = std::collections::HashSet::new();
+                
+                if let Some(documents) = firestore_response["documents"].as_array() {
+                    for doc in documents {
+                        if let Some(name) = doc["name"].as_str() {
+                            // Extract track_id from document name
+                            let track_id = name.split('/').last().unwrap_or("").to_string();
+                            if !track_id.is_empty() {
+                                available_tracks.insert(track_id);
+                            }
+                        }
+                    }
+                }
+                
+                Ok(available_tracks)
+            }
+            404 => Ok(std::collections::HashSet::new()), // No documents found
+            _ => {
+                let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+                Err(AuthError::new(&format!("Failed to get available tracks: {}", error_text)).into())
+            }
+        }
+    }
+
+    /// Add track to available tracks in Firebase
+    pub async fn add_available_track(&self, track_id: &str) -> AuthResult<bool> {
+        let url = self.get_document_path("available_tracks", track_id);
+
+        let document_data = serde_json::json!({
+            "fields": {
+                "track_id": {
+                    "stringValue": track_id
+                },
+                "added_at": {
+                    "timestampValue": chrono::Utc::now().to_rfc3339()
+                }
+            }
+        });
+
+        let response = self.client
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .json(&document_data)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to add available track: {}", e)))?;
+
+        if response.status().is_success() {
+            Ok(true)
+        } else {
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            Err(AuthError::new(&format!("Failed to add available track: {}", error_text)).into())
+        }
+    }
+
+    /// Remove track from available tracks in Firebase
+    pub async fn remove_available_track(&self, track_id: &str) -> AuthResult<bool> {
+        let url = self.get_document_path("available_tracks", track_id);
+
+        let response = self.client
+            .delete(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("Failed to remove available track: {}", e)))?;
+
+        if response.status().is_success() {
+            Ok(true)
+        } else if response.status().as_u16() == 404 {
+            Ok(false) // Track was not in available tracks
+        } else {
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            Err(AuthError::new(&format!("Failed to remove available track: {}", error_text)).into())
+        }
     }
 }
