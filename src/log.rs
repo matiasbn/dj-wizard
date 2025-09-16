@@ -135,20 +135,9 @@ impl DjWizardLog {
     }
 
     pub fn get_soundeo() -> DjWizardLogResult<Soundeo> {
-        // Use Firebase only - no fallback to local
-        Ok(tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
-                let firebase_client = FirebaseClient::new(auth_token)
-                    .await
-                    .map_err(|_| "Firebase unavailable")?;
-                firebase_client
-                    .get_soundeo()
-                    .await
-                    .map_err(|_| "Failed to get soundeo from Firebase")
-            })
-        })
-        .map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+        // Read from local storage for migrate compatibility
+        let log = Self::read_log()?;
+        Ok(log.soundeo)
     }
 
     pub fn get_soundeo_tracks_info() -> DjWizardLogResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
