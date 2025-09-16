@@ -472,6 +472,7 @@ impl FirebaseClient {
         let data = serde_json::to_value(track)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
+        // Use simple flat collection structure for O(1) access
         self.set_document("soundeo_tracks", track_id, &data).await
     }
 
@@ -520,113 +521,4 @@ impl FirebaseClient {
         }
     }
 
-    /// Batch save multiple tracks for migration (parallel uploads)
-    pub async fn batch_save_tracks(&self, tracks: &std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>) -> AuthResult<()> {
-        use futures_util::stream::{FuturesUnordered, StreamExt};
-        use std::sync::Arc;
-
-        let batch_size = 100;
-        let concurrent_limit = 5;
-        let tracks_vec: Vec<_> = tracks.iter().collect();
-        let total_batches = (tracks_vec.len() + batch_size - 1) / batch_size;
-
-        println!("🚀 Starting batch save of {} tracks with {} concurrent uploads", tracks.len(), concurrent_limit);
-
-        let client = Arc::new(self);
-        
-        type BatchFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<usize, AuthError>> + Send>>;
-        let mut active_futures: FuturesUnordered<BatchFuture> = FuturesUnordered::new();
-        let mut next_batch_idx = 0;
-        let mut completed_batches = 0;
-
-        // Start initial batch of concurrent uploads
-        while next_batch_idx < total_batches && active_futures.len() < concurrent_limit {
-            let chunk_start = next_batch_idx * batch_size;
-            let chunk_end = ((next_batch_idx + 1) * batch_size).min(tracks_vec.len());
-            let chunk = &tracks_vec[chunk_start..chunk_end];
-            let batch_num = next_batch_idx + 1;
-
-            println!("📤 Starting batch {} ({} tracks)...", batch_num, chunk.len());
-
-            let client_clone = client.clone();
-            let chunk_vec: Vec<_> = chunk.iter().map(|(id, track)| ((*id).clone(), (*track).clone())).collect();
-            
-            let future = async move {
-                let mut batch_results = Vec::new();
-                for (track_id, track) in chunk_vec {
-                    let result = client_clone.save_track(&track_id, &track).await;
-                    batch_results.push((track_id, result));
-                }
-                
-                let failed_tracks: Vec<_> = batch_results.iter()
-                    .filter(|(_, result)| result.is_err())
-                    .collect();
-                
-                if failed_tracks.is_empty() {
-                    println!("✅ Batch {} completed successfully", batch_num);
-                    Ok(batch_num)
-                } else {
-                    println!("❌ Batch {} had {} failures", batch_num, failed_tracks.len());
-                    Err(AuthError::new(&format!("Batch {} had failures", batch_num)))
-                }
-            };
-
-            active_futures.push(Box::pin(future) as BatchFuture);
-            next_batch_idx += 1;
-        }
-
-        // Process completions and start new batches immediately
-        while !active_futures.is_empty() {
-            if let Some(result) = active_futures.next().await {
-                match result {
-                    Ok(batch_num) => {
-                        completed_batches += 1;
-                        println!("🎯 Progress: {}/{} batches completed", completed_batches, total_batches);
-
-                        // Immediately start the next batch if available
-                        if next_batch_idx < total_batches {
-                            let chunk_start = next_batch_idx * batch_size;
-                            let chunk_end = ((next_batch_idx + 1) * batch_size).min(tracks_vec.len());
-                            let chunk = &tracks_vec[chunk_start..chunk_end];
-                            let new_batch_num = next_batch_idx + 1;
-
-                            println!("📤 Starting batch {} ({} tracks)...", new_batch_num, chunk.len());
-
-                            let client_clone = client.clone();
-                            let chunk_vec: Vec<_> = chunk.iter().map(|(id, track)| ((*id).clone(), (*track).clone())).collect();
-                            
-                            let future = async move {
-                                let mut batch_results = Vec::new();
-                                for (track_id, track) in chunk_vec {
-                                    let result = client_clone.save_track(&track_id, &track).await;
-                                    batch_results.push((track_id, result));
-                                }
-                                
-                                let failed_tracks: Vec<_> = batch_results.iter()
-                                    .filter(|(_, result)| result.is_err())
-                                    .collect();
-                                
-                                if failed_tracks.is_empty() {
-                                    println!("✅ Batch {} completed successfully", new_batch_num);
-                                    Ok(new_batch_num)
-                                } else {
-                                    println!("❌ Batch {} had {} failures", new_batch_num, failed_tracks.len());
-                                    Err(AuthError::new(&format!("Batch {} had failures", new_batch_num)))
-                                }
-                            };
-
-                            active_futures.push(Box::pin(future) as BatchFuture);
-                            next_batch_idx += 1;
-                        }
-                    }
-                    Err(e) => {
-                        return Err(e.into());
-                    }
-                }
-            }
-        }
-
-        println!("🎉 Successfully saved all {} tracks to individual documents!", tracks.len());
-        Ok(())
-    }
 }

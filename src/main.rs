@@ -267,9 +267,21 @@ impl DjWizardCommands {
                 use crate::auth::firebase_client::FirebaseClient;
                 use crate::auth::google_auth::GoogleAuth;
 
-                // Try to load existing token
+                // Try to load existing token, refresh if needed
                 let auth_token = match GoogleAuth::load_token() {
-                    Ok(token) => token,
+                    Ok(token) => {
+                        // Check if token is about to expire (within 5 minutes)
+                        let expires_soon = token.expires_at - chrono::Duration::minutes(5);
+                        if chrono::Utc::now() > expires_soon {
+                            println!("🔄 Token expires soon, refreshing authentication...");
+                            GoogleAuth::new()
+                                .login()
+                                .await
+                                .change_context(DjWizardError)?
+                        } else {
+                            token
+                        }
+                    }
                     Err(_) => {
                         println!(
                             "❌ No valid authentication found. Please run 'dj-wizard auth' first."
@@ -377,8 +389,8 @@ impl DjWizardCommands {
                 }
 
                 if *soundeo {
-                    // Use existing DjWizardLog logic to read soundeo properly
-                    println!("🎵 Soundeo mode: Using existing log reader...");
+                    // Ultra fast individual track migration with O(1) access using same parallelism
+                    println!("⚡ Soundeo mode: Migrating tracks as individual documents for O(1) access...");
 
                     // Read soundeo using the existing working logic
                     use crate::log::DjWizardLog;
@@ -386,216 +398,197 @@ impl DjWizardCommands {
                         DjWizardLog::get_soundeo().change_context(DjWizardError)?;
 
                     println!(
-                        "📊 Found soundeo with {} tracks_info",
+                        "📊 Found soundeo with {} tracks_info for ultra-fast individual migration",
                         current_soundeo.tracks_info.len()
                     );
 
-                    // Get existing document first
-                    println!("📥 Getting existing document...");
-                    let mut existing_doc = firebase_client
-                        .get_document("dj_wizard_data", "soundeo_log")
-                        .await
-                        .change_context(DjWizardError)?
-                        .unwrap_or_else(|| serde_json::json!({}));
-
                     if current_soundeo.tracks_info.is_empty() {
-                        // No tracks_info, just add soundeo structure
-                        let soundeo_value = serde_json::to_value(&current_soundeo)
-                            .into_report()
-                            .change_context(DjWizardError)?;
+                        println!("ℹ️  No tracks to migrate in soundeo mode");
+                        return Ok(());
+                    }
 
-                        if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
-                            existing_map.insert("soundeo".to_string(), soundeo_value);
-                        } else {
-                            existing_doc = serde_json::json!({
-                                "soundeo": soundeo_value
-                            });
+                    // Convert to vector for individual track processing
+                    let tracks: Vec<_> = current_soundeo.tracks_info.into_iter().collect();
+                    let total_tracks = tracks.len();
+                    let concurrent_limit = 5; // 5 threads with persistent status lines
+                    let max_retries = 3;
+
+                    // Test Firebase connectivity first
+                    println!("🔍 Testing Firebase connectivity...");
+                    match firebase_client.get_document("test", "connectivity_test").await {
+                        Ok(_) => println!("✅ Firebase connection OK"),
+                        Err(e) => {
+                            println!("❌ Firebase connection failed: {}", e);
+                            println!("⚠️  Check your internet connection and Firebase permissions");
+                            return Err(DjWizardError).into_report();
                         }
+                    }
 
-                        firebase_client
-                            .set_document("dj_wizard_data", "soundeo_log", &existing_doc)
-                            .await
-                            .change_context(DjWizardError)?;
+                    println!(
+                        "🚀 Starting individual track migration with {} concurrent threads",
+                        concurrent_limit
+                    );
 
-                        println!("🎉 Successfully added empty soundeo field!");
-                    } else {
-                        // Has tracks_info - migrate in batches
-                        let tracks: Vec<_> = current_soundeo.tracks_info.into_iter().collect();
+                    use futures_util::stream::{FuturesUnordered, StreamExt};
+                    use std::future::Future;
+                    use std::pin::Pin;
+                    use std::sync::atomic::{AtomicUsize, Ordering};
+                    use std::sync::Arc;
+                    use std::io::{self, Write};
 
-                        // Initialize soundeo structure in document first (empty tracks_info)
-                        let empty_soundeo = crate::soundeo::Soundeo::new();
-                        let soundeo_value = serde_json::to_value(&empty_soundeo)
-                            .into_report()
-                            .change_context(DjWizardError)?;
+                    type TrackFuture = Pin<
+                        Box<
+                            dyn Future<
+                                    Output = Result<
+                                        String,
+                                        error_stack::Report<crate::auth::AuthError>,
+                                    >,
+                                > + Send,
+                        >,
+                    >;
 
-                        if let serde_json::Value::Object(ref mut existing_map) = existing_doc {
-                            existing_map.insert("soundeo".to_string(), soundeo_value);
-                        } else {
-                            existing_doc = serde_json::json!({
-                                "soundeo": soundeo_value
-                            });
-                        }
+                    // Shared progress counters
+                    let completed_count = Arc::new(AtomicUsize::new(0));
+                    let failed_count = Arc::new(AtomicUsize::new(0));
+                    let firebase_client = Arc::new(firebase_client);
 
-                        // Migrate tracks_info with sliding window parallel processing
-                        let batch_size = 100;
-                        let total_batches = (tracks.len() + batch_size - 1) / batch_size;
-                        let concurrent_limit = 5;
+                    // Helper function to create individual track upload future with retry
+                    let create_track_future = |track_id: String,
+                                               track: crate::soundeo::track::SoundeoTrack,
+                                               client: Arc<FirebaseClient>,
+                                               completed: Arc<AtomicUsize>,
+                                               failed: Arc<AtomicUsize>,
+                                               total: usize,
+                                               thread_id: usize|
+                     -> TrackFuture {
+                        Box::pin(async move {
+                            let mut retry_count = 0;
 
-                        println!("🚀 Starting sliding window parallel migration with {} concurrent slots", concurrent_limit);
-
-                        use futures_util::stream::{FuturesUnordered, StreamExt};
-                        use std::future::Future;
-                        use std::pin::Pin;
-                        use std::sync::Arc;
-
-                        type BatchFuture = Pin<
-                            Box<
-                                dyn Future<
-                                        Output = Result<
-                                            (usize, serde_json::Value),
-                                            error_stack::Report<crate::auth::AuthError>,
-                                        >,
-                                    > + Send,
-                            >,
-                        >;
-
-                        let mut active_futures: FuturesUnordered<BatchFuture> =
-                            FuturesUnordered::new();
-                        let mut next_batch_idx = 0;
-                        let mut completed_batches = 0;
-
-                        // Wrap firebase_client in Arc for sharing across futures
-                        let firebase_client = Arc::new(firebase_client);
-
-                        // Helper function to create a batch upload future
-                        let create_batch_future = |batch_num: usize,
-                                                   batch_doc: serde_json::Value,
-                                                   chunk_len: usize,
-                                                   client: Arc<FirebaseClient>|
-                         -> BatchFuture {
-                            Box::pin(async move {
-                                println!(
-                                    "📤 Starting batch {} ({} tracks)...",
-                                    batch_num, chunk_len
-                                );
-
-                                let result = client
-                                    .set_document("dj_wizard_data", "soundeo_log", &batch_doc)
-                                    .await;
-
-                                match result {
+                            loop {
+                                match client.save_track(&track_id, &track).await {
                                     Ok(_) => {
-                                        println!("✅ Batch {} completed successfully", batch_num);
-                                        Ok((batch_num, batch_doc))
+                                        let current_completed =
+                                            completed.fetch_add(1, Ordering::Relaxed) + 1;
+                                        let current_failed = failed.load(Ordering::Relaxed);
+                                        
+                                        // Update this thread's line in-place
+                                        print!("\x1B[{}A", concurrent_limit - thread_id); // Move cursor up to thread line
+                                        print!("\x1B[2K"); // Clear the line
+                                        println!("Thread {}: ✅ {} uploaded ({}/{})", 
+                                                thread_id, track_id, current_completed + current_failed, total);
+                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move cursor back down
+                                        io::stdout().flush().unwrap_or_default();
+                                        
+                                        return Ok(track_id);
                                     }
                                     Err(e) => {
-                                        println!("❌ Batch {} failed: {:?}", batch_num, e);
-                                        Err(e)
-                                    }
-                                }
-                            })
-                        };
-
-                        // Helper function to prepare batch data
-                        let prepare_batch_data = |batch_idx: usize,
-                                                  existing_doc: &serde_json::Value|
-                         -> DjWizardResult<(
-                            usize,
-                            serde_json::Value,
-                            usize,
-                        )> {
-                            let chunk_start = batch_idx * batch_size;
-                            let chunk_end = ((batch_idx + 1) * batch_size).min(tracks.len());
-                            let chunk = &tracks[chunk_start..chunk_end];
-
-                            // Clone and build the batch document
-                            let mut batch_doc = existing_doc.clone();
-                            let batch_num = batch_idx + 1;
-
-                            if let serde_json::Value::Object(ref mut doc_map) = batch_doc {
-                                if let Some(serde_json::Value::Object(ref mut soundeo_map)) =
-                                    doc_map.get_mut("soundeo")
-                                {
-                                    if let Some(serde_json::Value::Object(
-                                        ref mut tracks_info_map,
-                                    )) = soundeo_map.get_mut("tracks_info")
-                                    {
-                                        for (track_id, track) in chunk {
-                                            let track_value = serde_json::to_value(track)
-                                                .into_report()
-                                                .change_context(DjWizardError)?;
-                                            tracks_info_map.insert(track_id.clone(), track_value);
+                                        retry_count += 1;
+                                        if retry_count > max_retries {
+                                            let current_failed =
+                                                failed.fetch_add(1, Ordering::Relaxed) + 1;
+                                            let current_completed =
+                                                completed.load(Ordering::Relaxed);
+                                            
+                                            // Update this thread's line in-place
+                                            print!("\x1B[{}A", concurrent_limit - thread_id); // Move cursor up
+                                            print!("\x1B[2K"); // Clear the line
+                                            println!("Thread {}: ❌ {} failed: {} ({}/{})",
+                                                    thread_id, track_id, e, current_completed + current_failed, total);
+                                            print!("\x1B[{}B", concurrent_limit - thread_id); // Move cursor back down
+                                            io::stdout().flush().unwrap_or_default();
+                                            
+                                            return Err(e);
                                         }
+                                        
+                                        // Update this thread's line with retry info
+                                        print!("\x1B[{}A", concurrent_limit - thread_id); // Move cursor up
+                                        print!("\x1B[2K"); // Clear the line
+                                        println!("Thread {}: 🔄 {} retry {}/{} ({})", 
+                                                thread_id, track_id, retry_count, max_retries, e);
+                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move cursor back down
+                                        io::stdout().flush().unwrap_or_default();
+                                        
+                                        // Small delay before retry
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            100 * retry_count as u64,
+                                        ))
+                                        .await;
                                     }
                                 }
                             }
+                        })
+                    };
 
-                            Ok((batch_num, batch_doc, chunk.len()))
-                        };
+                    let mut active_futures: FuturesUnordered<TrackFuture> = FuturesUnordered::new();
+                    let mut next_track_idx = 0;
 
-                        // Start initial batch of concurrent uploads
-                        while next_batch_idx < total_batches
-                            && active_futures.len() < concurrent_limit
-                        {
-                            match prepare_batch_data(next_batch_idx, &existing_doc) {
-                                Ok((batch_num, batch_doc, chunk_len)) => {
-                                    let future = create_batch_future(
-                                        batch_num,
-                                        batch_doc,
-                                        chunk_len,
-                                        firebase_client.clone(),
-                                    );
-                                    active_futures.push(future);
-                                    next_batch_idx += 1;
-                                }
-                                Err(e) => return Err(e),
-                            }
-                        }
+                    // Initialize the 5 persistent thread status lines
+                    for i in 0..concurrent_limit {
+                        println!("Thread {}: Waiting...", i);
+                    }
 
-                        // Process completions and start new batches immediately
-                        while !active_futures.is_empty() {
-                            if let Some(result) = active_futures.next().await {
-                                match result {
-                                    Ok((batch_num, batch_doc)) => {
-                                        completed_batches += 1;
-
-                                        // Update our local state with the successful batch
-                                        existing_doc = batch_doc;
-
-                                        println!(
-                                            "🎯 Progress: {}/{} batches completed",
-                                            completed_batches, total_batches
-                                        );
-
-                                        // Immediately start the next batch if available
-                                        if next_batch_idx < total_batches {
-                                            match prepare_batch_data(next_batch_idx, &existing_doc)
-                                            {
-                                                Ok((new_batch_num, new_batch_doc, chunk_len)) => {
-                                                    let future = create_batch_future(
-                                                        new_batch_num,
-                                                        new_batch_doc,
-                                                        chunk_len,
-                                                        firebase_client.clone(),
-                                                    );
-                                                    active_futures.push(future);
-                                                    next_batch_idx += 1;
-                                                }
-                                                Err(e) => return Err(e),
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        return Err(e.change_context(DjWizardError));
-                                    }
-                                }
-                            }
-                        }
-
-                        println!(
-                            "🎉 Successfully migrated all {} tracks to soundeo.tracks_info!",
-                            tracks.len()
+                    // Start initial concurrent uploads
+                    while next_track_idx < total_tracks && active_futures.len() < concurrent_limit {
+                        let (track_id, track) = tracks[next_track_idx].clone();
+                        let thread_id = active_futures.len(); // Use current index as thread ID
+                        let future = create_track_future(
+                            track_id,
+                            track,
+                            firebase_client.clone(),
+                            completed_count.clone(),
+                            failed_count.clone(),
+                            total_tracks,
+                            thread_id,
                         );
+                        active_futures.push(future);
+                        next_track_idx += 1;
+                    }
+
+                    // Process completions and start new uploads immediately
+                    while !active_futures.is_empty() {
+                        if let Some(_result) = active_futures.next().await {
+                            // Immediately start the next track if available
+                            if next_track_idx < total_tracks {
+                                let (track_id, track) = tracks[next_track_idx].clone();
+                                let thread_id = next_track_idx % concurrent_limit; // Cycle through thread IDs
+                                let future = create_track_future(
+                                    track_id,
+                                    track,
+                                    firebase_client.clone(),
+                                    completed_count.clone(),
+                                    failed_count.clone(),
+                                    total_tracks,
+                                    thread_id,
+                                );
+                                active_futures.push(future);
+                                next_track_idx += 1;
+                            }
+                        }
+                    }
+
+                    // Final summary
+                    let final_completed = completed_count.load(Ordering::Relaxed);
+                    let final_failed = failed_count.load(Ordering::Relaxed);
+                    let total_processed = final_completed + final_failed;
+                    
+                    println!("\n📊 Migration Complete!");
+                    println!("   📈 Total processed: {} tracks", total_processed);
+                    println!("   ✅ Successfully migrated: {} tracks ({}%)", 
+                            final_completed, 
+                            if total_processed > 0 { (final_completed * 100) / total_processed } else { 0 });
+                    if final_failed > 0 {
+                        println!("   ❌ Failed to migrate: {} tracks ({}%)", 
+                                final_failed,
+                                if total_processed > 0 { (final_failed * 100) / total_processed } else { 0 });
+                    }
+                    
+                    if final_completed > 0 {
+                        println!("🚀 Tracks are now accessible with O(1) performance by ID!");
+                        println!("💡 Access any track instantly: firebase_client.get_track(\"track_id\").await");
+                    }
+                    
+                    if final_failed > 0 {
+                        println!("⚠️  Some tracks failed to migrate. Check Firebase permissions and network connectivity.");
                     }
 
                     return Ok(());
