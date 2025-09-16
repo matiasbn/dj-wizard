@@ -562,4 +562,69 @@ impl FirebaseClient {
         }
     }
 
+    /// Batch write multiple tracks (up to 500 per batch for optimal performance)
+    pub async fn batch_write_tracks(&self, tracks: &[(String, crate::soundeo::track::SoundeoTrack)]) -> AuthResult<()> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+
+        // Firebase batch write limit is 500 operations
+        if tracks.len() > 500 {
+            return Err(AuthError::new("Batch size exceeds Firebase limit of 500 operations").into());
+        }
+
+        let user_id = &self.user_id;
+        let batch_url = format!(
+            "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents:batchWrite",
+            self.project_id
+        );
+
+        // Build batch writes
+        let mut writes = Vec::new();
+        for (track_id, track) in tracks {
+            let document_path = format!(
+                "projects/{}/databases/(default)/documents/users/{}/soundeo_tracks/{}",
+                self.project_id, user_id, track_id
+            );
+
+            // Convert track to Firestore fields format
+            let track_json = serde_json::to_value(track)
+                .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
+            
+            let fields = if let Value::Object(obj) = &track_json {
+                obj.iter()
+                    .map(|(k, v)| (k.clone(), self.convert_to_firestore_value(v)))
+                    .collect::<serde_json::Map<String, Value>>()
+            } else {
+                return Err(AuthError::new("Track data is not a JSON object").into());
+            };
+
+            writes.push(serde_json::json!({
+                "update": {
+                    "name": document_path,
+                    "fields": fields
+                }
+            }));
+        }
+
+        let batch_request = serde_json::json!({
+            "writes": writes
+        });
+
+        let response = self.client
+            .post(&batch_url)
+            .bearer_auth(&self.access_token)
+            .json(&batch_request)
+            .send()
+            .await
+            .map_err(|e| AuthError::new(&format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(AuthError::new(&format!("Firestore batch write error: {}", error_text)).into());
+        }
+
+        Ok(())
+    }
+
 }

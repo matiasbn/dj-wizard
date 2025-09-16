@@ -430,7 +430,8 @@ impl DjWizardCommands {
                     }
 
                     let tracks = non_migrated_tracks;
-                    let concurrent_limit = 8; // 4 threads with persistent status lines
+                    let batch_size = 200; // Conservative batch size for reliability
+                    let concurrent_batches = 3; // 3 concurrent batch threads
                     let max_retries = 3;
 
                     // Test Firebase connectivity first
@@ -447,233 +448,138 @@ impl DjWizardCommands {
                         }
                     }
 
+                    // Split tracks into batches of 200
+                    let batches: Vec<_> = tracks.chunks(batch_size).collect();
+                    let total_batches = batches.len();
+                    
                     println!(
-                        "🚀 Starting individual track migration with {} concurrent threads",
-                        concurrent_limit
+                        "🚀 Starting batch migration: {} batches of {} tracks with {} concurrent threads",
+                        total_batches, batch_size, concurrent_batches
                     );
 
-                    use futures_util::stream::{FuturesUnordered, StreamExt};
-                    use std::future::Future;
-                    use std::io::{self, Write};
-                    use std::pin::Pin;
+                    // Migration timing
+                    let start_time = std::time::Instant::now();
+
+                    // Helper function to update real-time stats  
+                    let update_stats = |completed: usize, failed: usize, total: usize, start_time: std::time::Instant| {
+                        let elapsed = start_time.elapsed();
+                        let processed = completed + failed;
+                        let avg_time = if completed > 0 {
+                            elapsed / completed as u32
+                        } else {
+                            std::time::Duration::from_secs(0)
+                        };
+                        let rate = if elapsed.as_secs() > 0 {
+                            (completed as f64 / elapsed.as_secs_f64()) * 60.0
+                        } else {
+                            0.0
+                        };
+
+                        format!(
+                            "📊 {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 📈 {:.2?}/track | 🚀 {:.1}/min",
+                            processed, total, completed, failed, elapsed, avg_time, rate
+                        )
+                    };
+
+                    // Progress tracking
                     use std::sync::atomic::{AtomicUsize, Ordering};
                     use std::sync::Arc;
-
-                    type TrackFuture = Pin<
-                        Box<
-                            dyn Future<
-                                    Output = Result<
-                                        String,
-                                        error_stack::Report<crate::auth::AuthError>,
-                                    >,
-                                > + Send,
-                        >,
-                    >;
-
-                    // Shared progress counters
                     let completed_count = Arc::new(AtomicUsize::new(0));
                     let failed_count = Arc::new(AtomicUsize::new(0));
                     let firebase_client = Arc::new(firebase_client);
 
-                    // Migration timing
-                    let start_time = std::time::Instant::now();
-                    let start_time_shared = Arc::new(start_time);
+                    // Initialize status display
+                    println!("{}", update_stats(0, 0, total_tracks, start_time));
+                    for i in 0..concurrent_batches {
+                        println!("Batch Thread {}: Waiting...", i);
+                    }
 
-                    // Helper function to update real-time stats
-                    let update_stats =
-                        |completed: usize,
-                         failed: usize,
-                         total: usize,
-                         start_time: std::time::Instant| {
-                            let elapsed = start_time.elapsed();
-                            let processed = completed + failed;
-                            let avg_time = if completed > 0 {
-                                elapsed / completed as u32
-                            } else {
-                                std::time::Duration::from_secs(0)
-                            };
-                            let rate = if elapsed.as_secs() > 0 {
-                                (completed as f64 / elapsed.as_secs_f64()) * 60.0
-                            } else {
-                                0.0
-                            };
+                    // Process batches concurrently using tokio tasks
+                    use futures_util::stream::{FuturesUnordered, StreamExt};
+                    let mut batch_futures = FuturesUnordered::new();
 
-                            format!(
-                                "📊 {}/{} | ✅ {} ❌ {} | ⏱️ {:?} | 📈 {:.2?}/track | 🚀 {:.1}/min",
-                                processed, total, completed, failed, elapsed, avg_time, rate
-                            )
-                        };
-
-                    // Helper function to create individual track upload future with retry
-                    let create_track_future = |track_id: String,
-                                               track: crate::soundeo::track::SoundeoTrack,
-                                               client: Arc<FirebaseClient>,
-                                               completed: Arc<AtomicUsize>,
-                                               failed: Arc<AtomicUsize>,
-                                               total: usize,
-                                               thread_id: usize,
-                                               start_time: Arc<std::time::Instant>|
-                     -> TrackFuture {
-                        Box::pin(async move {
+                    // Create futures for each batch with limited concurrency
+                    for (batch_idx, batch) in batches.into_iter().enumerate() {
+                        let thread_id = batch_idx % concurrent_batches;
+                        let client = firebase_client.clone();
+                        let completed = completed_count.clone();
+                        let failed = failed_count.clone();
+                        let batch_tracks: Vec<_> = batch.iter().cloned().collect();
+                        
+                        let future = tokio::spawn(async move {
                             let mut retry_count = 0;
-
-                            // Always overwrite tracks for maximum speed
-
+                            
                             loop {
-                                match client.save_track(&track_id, &track).await {
+                                // Update status
+                                print!("\x1B[{}A", concurrent_batches - thread_id);
+                                print!("\x1B[2K\rBatch Thread {}: Processing batch {} ({} tracks)...", 
+                                        thread_id, batch_idx + 1, batch_tracks.len());
+                                print!("\x1B[{}B", concurrent_batches - thread_id);
+                                std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                                
+                                match client.batch_write_tracks(&batch_tracks).await {
                                     Ok(_) => {
-                                        let current_completed =
-                                            completed.fetch_add(1, Ordering::Relaxed) + 1;
-                                        let current_failed = failed.load(Ordering::Relaxed);
-
-                                        // Update this thread's line only
-                                        print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                        print!(
-                                            "\x1B[2K\rThread {}: ✅ {} uploaded ({}/{})",
-                                            thread_id,
-                                            track_id,
-                                            current_completed + current_failed,
-                                            total
-                                        );
-                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down to end
-                                        io::stdout().flush().unwrap_or_default();
-
-                                        // Mark as migrated in local JSON
-                                        if let Err(e) =
-                                            DjWizardLog::mark_track_as_migrated(&track_id)
-                                        {
-                                            eprintln!(
-                                                "⚠️  Failed to mark track {} as migrated: {}",
-                                                track_id, e
-                                            );
+                                        // Mark all tracks in batch as migrated
+                                        for (track_id, _) in &batch_tracks {
+                                            if let Err(e) = DjWizardLog::mark_track_as_migrated(track_id) {
+                                                eprintln!("⚠️  Failed to mark track {} as migrated: {}", track_id, e);
+                                            }
                                         }
-
-                                        return Ok(track_id);
+                                        
+                                        let current_completed = completed.fetch_add(batch_tracks.len(), Ordering::Relaxed) + batch_tracks.len();
+                                        
+                                        // Update status
+                                        print!("\x1B[{}A", concurrent_batches - thread_id);
+                                        print!("\x1B[2K\rBatch Thread {}: ✅ Batch {} completed ({} tracks)", 
+                                                thread_id, batch_idx + 1, batch_tracks.len());
+                                        print!("\x1B[{}B", concurrent_batches - thread_id);
+                                        std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                                        
+                                        return Ok(batch_tracks.len());
                                     }
                                     Err(e) => {
                                         retry_count += 1;
                                         if retry_count > max_retries {
-                                            let current_failed =
-                                                failed.fetch_add(1, Ordering::Relaxed) + 1;
-                                            let current_completed =
-                                                completed.load(Ordering::Relaxed);
-
-                                            // Update this thread's line only
-                                            print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                            print!(
-                                                "\x1B[2K\rThread {}: ❌ {} failed: {} ({}/{})",
-                                                thread_id,
-                                                track_id,
-                                                e,
-                                                current_completed + current_failed,
-                                                total
-                                            );
-                                            print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down to end
-                                            io::stdout().flush().unwrap_or_default();
-
+                                            let current_failed = failed.fetch_add(batch_tracks.len(), Ordering::Relaxed) + batch_tracks.len();
+                                            
+                                            // Update status
+                                            print!("\x1B[{}A", concurrent_batches - thread_id);
+                                            print!("\x1B[2K\rBatch Thread {}: ❌ Batch {} failed: {}", 
+                                                    thread_id, batch_idx + 1, e);
+                                            print!("\x1B[{}B", concurrent_batches - thread_id);
+                                            std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                                            
                                             return Err(e);
                                         }
-
-                                        // Move to this thread's line, update it with retry info
-                                        print!("\x1B[{}A", concurrent_limit - thread_id); // Move up to thread line
-                                        print!(
-                                            "\x1B[2K\rThread {}: 🔄 {} retry {}/{} ({})",
-                                            thread_id, track_id, retry_count, max_retries, e
-                                        );
-                                        print!("\x1B[{}B", concurrent_limit - thread_id); // Move back down
-                                        io::stdout().flush().unwrap_or_default();
-
+                                        
+                                        // Update retry status
+                                        print!("\x1B[{}A", concurrent_batches - thread_id);
+                                        print!("\x1B[2K\rBatch Thread {}: 🔄 Batch {} retry {}/{} ({})", 
+                                                thread_id, batch_idx + 1, retry_count, max_retries, e);
+                                        print!("\x1B[{}B", concurrent_batches - thread_id);
+                                        std::io::Write::flush(&mut std::io::stdout()).unwrap_or_default();
+                                        
                                         // Small delay before retry
-                                        tokio::time::sleep(std::time::Duration::from_millis(
-                                            100 * retry_count as u64,
-                                        ))
-                                        .await;
+                                        tokio::time::sleep(std::time::Duration::from_millis(1000 * retry_count as u64)).await;
                                     }
                                 }
                             }
-                        })
-                    };
-
-                    let mut active_futures: FuturesUnordered<TrackFuture> = FuturesUnordered::new();
-                    let mut next_track_idx = 0;
-
-                    // Initialize statistics line and the thread status lines
-                    print!("{}\n", update_stats(0, 0, total_tracks, start_time));
-                    for i in 0..concurrent_limit {
-                        print!("Thread {}: Waiting...\n", i);
-                    }
-                    io::stdout().flush().unwrap_or_default();
-
-                    // Spawn a task to update statistics every second
-                    let stats_completed = completed_count.clone();
-                    let stats_failed = failed_count.clone();
-                    let stats_start_time = start_time_shared.clone();
-                    let stats_update = tokio::spawn(async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            let current_completed = stats_completed.load(Ordering::Relaxed);
-                            let current_failed = stats_failed.load(Ordering::Relaxed);
-
-                            // Update statistics line (first line)
-                            print!("\x1B[{}A", concurrent_limit + 1); // Move up to stats line
-                            print!(
-                                "\x1B[2K\r{}",
-                                update_stats(
-                                    current_completed,
-                                    current_failed,
-                                    total_tracks,
-                                    *stats_start_time
-                                )
-                            );
-                            print!("\x1B[{}B", concurrent_limit + 1); // Move back down
-                            io::stdout().flush().unwrap_or_default();
-
-                            // Stop when migration is complete
-                            if current_completed + current_failed >= total_tracks {
-                                break;
+                        });
+                        
+                        batch_futures.push(future);
+                        
+                        // Limit concurrent batches  
+                        if batch_futures.len() >= concurrent_batches {
+                            // Wait for one to complete before starting the next
+                            if let Some(_) = batch_futures.next().await {
+                                // Continue with next batch
                             }
                         }
-                    });
-
-                    // Start initial concurrent uploads
-                    while next_track_idx < total_tracks && active_futures.len() < concurrent_limit {
-                        let (track_id, track) = tracks[next_track_idx].clone();
-                        let thread_id = active_futures.len(); // Use current index as thread ID
-                        let future = create_track_future(
-                            track_id,
-                            track,
-                            firebase_client.clone(),
-                            completed_count.clone(),
-                            failed_count.clone(),
-                            total_tracks,
-                            thread_id,
-                            start_time_shared.clone(),
-                        );
-                        active_futures.push(future);
-                        next_track_idx += 1;
                     }
-
-                    // Process completions and start new uploads immediately
-                    while !active_futures.is_empty() {
-                        if let Some(_result) = active_futures.next().await {
-                            // Immediately start the next track if available
-                            if next_track_idx < total_tracks {
-                                let (track_id, track) = tracks[next_track_idx].clone();
-                                let thread_id = next_track_idx % concurrent_limit; // Cycle through thread IDs
-                                let future = create_track_future(
-                                    track_id,
-                                    track,
-                                    firebase_client.clone(),
-                                    completed_count.clone(),
-                                    failed_count.clone(),
-                                    total_tracks,
-                                    thread_id,
-                                    start_time_shared.clone(),
-                                );
-                                active_futures.push(future);
-                                next_track_idx += 1;
-                            }
-                        }
+                    
+                    // Wait for all remaining batches to complete
+                    while let Some(_) = batch_futures.next().await {
+                        // Process completions
                     }
 
                     // Final summary with timing
@@ -728,8 +634,6 @@ impl DjWizardCommands {
                         println!("⚠️  Some tracks failed to migrate. Check Firebase permissions and network connectivity.");
                     }
 
-                    // Cancel the statistics update task
-                    stats_update.abort();
 
                     return Ok(());
                 }
