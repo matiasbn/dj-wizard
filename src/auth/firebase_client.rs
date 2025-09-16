@@ -17,6 +17,9 @@ pub struct FirebaseClient {
 }
 
 impl FirebaseClient {
+    // Collection names constants
+    const COLLECTION_DJ_WIZARD_DATA: &'static str = "dj_wizard_data";
+    const DOCUMENT_MAIN: &'static str = "main";
     pub async fn new(auth_token: AuthToken) -> AuthResult<Self> {
         Ok(Self {
             client: reqwest::Client::new(),
@@ -34,6 +37,39 @@ impl FirebaseClient {
             "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents",
             self.project_id
         )
+    }
+
+    /// Centralized Firebase collection paths
+    fn get_collection_path(&self, collection: &str) -> String {
+        format!(
+            "{}/users/{}/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            collection
+        )
+    }
+
+    fn get_document_path(&self, collection: &str, document_id: &str) -> String {
+        format!(
+            "{}/users/{}/{}/{}",
+            self.firestore_url(),
+            urlencoding::encode(&self.user_id),
+            collection,
+            document_id
+        )
+    }
+
+    /// Get complete Firebase URL path based on collection type
+    fn get_firebase_url(&self, collection_type: &str) -> String {
+        match collection_type {
+            Self::COLLECTION_DJ_WIZARD_DATA => {
+                self.get_document_path(Self::COLLECTION_DJ_WIZARD_DATA, Self::DOCUMENT_MAIN)
+            }
+            _ => {
+                // Default to collection path for unknown types
+                self.get_collection_path(collection_type)
+            }
+        }
     }
 
     /// Ensure token is valid, refresh if needed
@@ -260,72 +296,38 @@ impl FirebaseClient {
 
     // Artist CRUD operations
 
-    /// Save artist manager to Firestore
+    /// Save artist manager to dj_wizard_data
     pub async fn save_artists(&self, artist_manager: &ArtistManager) -> AuthResult<()> {
         let data = serde_json::to_value(artist_manager)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
-        self.set_document("artists", "favorite_artists", &data)
-            .await
-    }
+        // Save to dj_wizard_data document as artists field
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
 
-    /// Load artist manager from Firestore
-    pub async fn load_artists(&self) -> AuthResult<Option<ArtistManager>> {
-        match self.get_document("artists", "favorite_artists").await? {
-            Some(data) => {
-                let artist_manager: ArtistManager = serde_json::from_value(data)
-                    .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
-                Ok(Some(artist_manager))
+        let firestore_doc = serde_json::json!({
+            "fields": {
+                "artists": self.convert_to_firestore_value(&data)
             }
-            None => Ok(None),
-        }
-    }
-
-    /// Add or update a specific artist
-    pub async fn save_artist(&self, artist_name: &str, artist: &Artist) -> AuthResult<()> {
-        let data = serde_json::to_value(artist)
-            .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
-
-        let collection = format!("artists/favorite_artists/artists");
-        self.set_document(&collection, artist_name, &data).await
-    }
-
-    /// Get a specific artist
-    pub async fn get_artist(&self, artist_name: &str) -> AuthResult<Option<Artist>> {
-        let collection = format!("artists/favorite_artists/artists");
-        match self.get_document(&collection, artist_name).await? {
-            Some(data) => {
-                let artist: Artist = serde_json::from_value(data)
-                    .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
-                Ok(Some(artist))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Delete a specific artist
-    pub async fn delete_artist(&self, artist_name: &str) -> AuthResult<()> {
-        let collection = format!("artists/favorite_artists/artists");
-        let url = format!(
-            "{}/{}/{}",
-            self.firestore_url(),
-            self.user_collection_path(&collection),
-            artist_name
-        );
+        });
 
         let response = self
             .client
-            .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.access_token))
+            .patch(&url)
+            .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "artists")])
+            .json(&firestore_doc)
             .send()
             .await
-            .map_err(|e| AuthError::new(&format!("Failed to delete artist: {}", e)))?;
+            .map_err(|e| AuthError::new(&format!("Failed to save artists data: {}", e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AuthError::new(&format!("Firestore delete error: {}", error_text)).into());
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            return Err(
+                AuthError::new(&format!("Failed to save artists data: {}", error_text)).into(),
+            );
         }
 
+        println!("✅ Artists data saved to dj_wizard_data successfully!");
         Ok(())
     }
 
@@ -336,20 +338,20 @@ impl FirebaseClient {
         let data = serde_json::to_value(genre_tracker)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
-        // Save directly to genre_tracker document (no subdocument)
-        let url = format!(
-            "{}/users/{}/genre_tracker/main",
-            self.firestore_url(),
-            urlencoding::encode(&self.user_id)
-        );
+        // Save to dj_wizard_data document as genre_tracker field
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
 
         let firestore_doc = serde_json::json!({
-            "fields": self.convert_object_to_firestore_fields(data.as_object().unwrap_or(&serde_json::Map::new()))
+            "fields": {
+                "genre_tracker": self.convert_to_firestore_value(&data)
+            }
         });
 
-        let response = self.client
+        let response = self
+            .client
             .patch(&url)
             .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "genre_tracker")])
             .json(&firestore_doc)
             .send()
             .await
@@ -357,82 +359,15 @@ impl FirebaseClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-            return Err(AuthError::new(&format!("Failed to save genre tracker: {}", error_text)).into());
+            return Err(
+                AuthError::new(&format!("Failed to save genre tracker: {}", error_text)).into(),
+            );
         }
 
+        println!("✅ Genre tracker data saved to dj_wizard_data successfully!");
         Ok(())
     }
 
-    /// Load genre tracker from Firestore
-    pub async fn load_genre_tracker(&self) -> AuthResult<Option<GenreTracker>> {
-        // Load directly from genre_tracker document (no subdocument)
-        let url = format!(
-            "{}/users/{}/genre_tracker/main",
-            self.firestore_url(),
-            urlencoding::encode(&self.user_id)
-        );
-
-        let response = self.client
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .send()
-            .await
-            .map_err(|e| AuthError::new(&format!("Failed to get genre tracker: {}", e)))?;
-
-        match response.status().as_u16() {
-            200 => {
-                let firestore_doc: serde_json::Value = response.json().await
-                    .map_err(|e| AuthError::new(&format!("Failed to parse response: {}", e)))?;
-                
-                if let Some(fields) = firestore_doc["fields"].as_object() {
-                    let converted_data = self.convert_firestore_fields_to_json(fields);
-                    let genre_tracker: GenreTracker = serde_json::from_value(converted_data)
-                        .map_err(|e| AuthError::new(&format!("Deserialization error: {}", e)))?;
-                    Ok(Some(genre_tracker))
-                } else {
-                    Ok(None)
-                }
-            }
-            404 => Ok(None),
-            _ => {
-                let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-                Err(AuthError::new(&format!("Failed to load genre tracker: {}", error_text)).into())
-            }
-        }
-    }
-    
-    /// Convert Firestore fields back to regular JSON
-    fn convert_firestore_fields_to_json(&self, fields: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
-        let mut result = serde_json::Map::new();
-        for (key, field_value) in fields {
-            if let Some(converted) = self.convert_firestore_field_to_json(field_value) {
-                result.insert(key.clone(), converted);
-            }
-        }
-        serde_json::Value::Object(result)
-    }
-    
-    /// Convert a single Firestore field back to JSON value
-    fn convert_firestore_field_to_json(&self, field: &serde_json::Value) -> Option<serde_json::Value> {
-        if let Some(string_val) = field["stringValue"].as_str() {
-            Some(serde_json::Value::String(string_val.to_string()))
-        } else if let Some(int_val) = field["integerValue"].as_str().and_then(|s| s.parse::<i64>().ok()) {
-            Some(serde_json::Value::Number(serde_json::Number::from(int_val)))
-        } else if let Some(double_val) = field["doubleValue"].as_f64() {
-            Some(serde_json::Value::Number(serde_json::Number::from_f64(double_val)?))
-        } else if let Some(bool_val) = field["booleanValue"].as_bool() {
-            Some(serde_json::Value::Bool(bool_val))
-        } else if let Some(array_val) = field["arrayValue"]["values"].as_array() {
-            let converted_array: Vec<serde_json::Value> = array_val.iter()
-                .filter_map(|v| self.convert_firestore_field_to_json(v))
-                .collect();
-            Some(serde_json::Value::Array(converted_array))
-        } else if let Some(map_fields) = field["mapValue"]["fields"].as_object() {
-            Some(self.convert_firestore_fields_to_json(map_fields))
-        } else {
-            None
-        }
-    }
 
     /// Add or update a specific tracked genre
     pub async fn save_tracked_genre(
@@ -1532,20 +1467,20 @@ impl FirebaseClient {
         let data = serde_json::to_value(spotify)
             .map_err(|e| AuthError::new(&format!("Serialization error: {}", e)))?;
 
-        // Save directly to spotify_data document (no subdocument)
-        let url = format!(
-            "{}/users/{}/spotify_data/main",
-            self.firestore_url(),
-            urlencoding::encode(&self.user_id)
-        );
+        // Save to dj_wizard_data document as spotify field
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
 
         let firestore_doc = serde_json::json!({
-            "fields": self.convert_object_to_firestore_fields(data.as_object().unwrap_or(&serde_json::Map::new()))
+            "fields": {
+                "spotify": self.convert_to_firestore_value(&data)
+            }
         });
 
-        let response = self.client
+        let response = self
+            .client
             .patch(&url)
             .bearer_auth(&self.access_token)
+            .query(&[("updateMask.fieldPaths", "spotify")])
             .json(&firestore_doc)
             .send()
             .await
@@ -1553,20 +1488,13 @@ impl FirebaseClient {
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or("Unknown error".to_string());
-            return Err(AuthError::new(&format!("Failed to save spotify data: {}", error_text)).into());
+            return Err(
+                AuthError::new(&format!("Failed to save spotify data: {}", error_text)).into(),
+            );
         }
 
-        println!("✅ Spotify collection migrated successfully!");
+        println!("✅ Spotify data saved to dj_wizard_data successfully!");
         Ok(())
-    }
-
-    /// Convert a JSON object to Firestore fields format
-    fn convert_object_to_firestore_fields(&self, obj: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
-        let mut fields = serde_json::Map::new();
-        for (key, value) in obj {
-            fields.insert(key.clone(), self.convert_to_firestore_value(value));
-        }
-        fields
     }
 
     /// Save url_list collection to Firebase
@@ -1614,6 +1542,39 @@ impl FirebaseClient {
         }
 
         println!("✅ URL list migrated successfully!");
+        Ok(())
+    }
+
+    /// Create or initialize the dj_wizard_data document
+    pub async fn create_dj_wizard_data_document(&self) -> AuthResult<()> {
+        let url = self.get_firebase_url(Self::COLLECTION_DJ_WIZARD_DATA);
+
+        // Create empty document structure
+        let empty_doc = serde_json::json!({
+            "fields": {}
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.access_token)
+            .json(&empty_doc)
+            .send()
+            .await
+            .map_err(|e| {
+                AuthError::new(&format!("Failed to create dj_wizard_data document: {}", e))
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or("Unknown error".to_string());
+            return Err(AuthError::new(&format!(
+                "Failed to create dj_wizard_data document: {}",
+                error_text
+            ))
+            .into());
+        }
+
+        println!("✅ dj_wizard_data document created successfully!");
         Ok(())
     }
 }

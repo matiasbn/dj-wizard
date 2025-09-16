@@ -29,7 +29,6 @@ pub struct MigrateCli {
 }
 
 impl MigrateCli {
-
     pub async fn execute(&self) -> MigrateResult<()> {
         let Self {
             soundeo_log,
@@ -48,7 +47,7 @@ impl MigrateCli {
             Ok(token) => token,
             Err(_) => {
                 println!("🔐 Authenticating with Google...");
-                
+
                 // Attempt automatic login
                 let google_auth = GoogleAuth::new();
                 match google_auth.login().await {
@@ -708,43 +707,62 @@ impl MigrateCli {
                     MigrateError
                 })?;
 
-            // Migrate each collection separately
+            // Create dj_wizard_data document first
+            println!("📁 Creating dj_wizard_data document...");
+            firebase_client
+                .create_dj_wizard_data_document()
+                .await
+                .map_err(|e| {
+                    eprintln!("Failed to create dj_wizard_data document: {}", e);
+                    MigrateError
+                })?;
+
+            // Migrate each collection separately to dj_wizard_data
             println!("📁 Migrating artist_manager...");
-            firebase_client.save_artists(&log_data.artist_manager).await
+            firebase_client
+                .save_artists(&log_data.artist_manager)
+                .await
                 .map_err(|e| {
                     eprintln!("Failed to migrate artist_manager: {}", e);
                     MigrateError
                 })?;
 
-            println!("📁 Migrating available_tracks...");
-            firebase_client.save_available_tracks(&log_data.available_tracks).await
-                .map_err(|e| {
-                    eprintln!("Failed to migrate available_tracks: {}", e);
-                    MigrateError
-                })?;
+            // println!("📁 Migrating available_tracks...");
+            // firebase_client.save_available_tracks(&log_data.available_tracks).await
+            //     .map_err(|e| {
+            //         eprintln!("Failed to migrate available_tracks: {}", e);
+            //         MigrateError
+            //     })?;
 
             println!("📁 Migrating genre_tracker...");
-            firebase_client.save_genre_tracker(&log_data.genre_tracker).await
+            firebase_client
+                .save_genre_tracker(&log_data.genre_tracker)
+                .await
                 .map_err(|e| {
                     eprintln!("Failed to migrate genre_tracker: {}", e);
                     MigrateError
                 })?;
 
             println!("📁 Migrating spotify...");
-            firebase_client.save_spotify_collection(&log_data.spotify).await
+            firebase_client
+                .save_spotify_collection(&log_data.spotify)
+                .await
                 .map_err(|e| {
                     eprintln!("Failed to migrate spotify: {}", e);
                     MigrateError
                 })?;
 
+            // url_list stays as separate collection (not in dj_wizard_data)
             println!("📁 Migrating url_list...");
-            firebase_client.save_url_list(&log_data.url_list).await
+            firebase_client
+                .save_url_list(&log_data.url_list)
+                .await
                 .map_err(|e| {
                     eprintln!("Failed to migrate url_list: {}", e);
                     MigrateError
                 })?;
 
-            println!("✅ All light collections migrated successfully!");
+            println!("✅ All collections migrated successfully!");
             return Ok(());
         }
 
