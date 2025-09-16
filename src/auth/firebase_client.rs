@@ -488,6 +488,47 @@ impl FirebaseClient {
         }
     }
 
+    /// Get multiple tracks from Firebase by IDs (O(n) batch access)
+    pub async fn get_tracks(&self, track_ids: &[String]) -> AuthResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+        use std::sync::Arc;
+
+        let client = Arc::new(self);
+        let mut futures = FuturesUnordered::new();
+        
+        // Create concurrent requests for all track IDs
+        for track_id in track_ids {
+            let client_clone = client.clone();
+            let id = track_id.clone();
+            
+            let future = async move {
+                let result = client_clone.get_track(&id).await;
+                (id, result)
+            };
+            futures.push(future);
+        }
+
+        let mut tracks = std::collections::HashMap::new();
+        
+        // Collect all results
+        while let Some((track_id, result)) = futures.next().await {
+            match result {
+                Ok(Some(track)) => {
+                    tracks.insert(track_id, track);
+                }
+                Ok(None) => {
+                    // Track not found, skip
+                }
+                Err(e) => {
+                    // Log error but continue with other tracks
+                    eprintln!("⚠️  Failed to get track {}: {}", track_id, e);
+                }
+            }
+        }
+
+        Ok(tracks)
+    }
+
     /// Delete a single track from Firebase by ID (O(1) access)
     pub async fn delete_track(&self, track_id: &str) -> AuthResult<()> {
         let url = format!(

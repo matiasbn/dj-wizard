@@ -84,6 +84,72 @@ impl DjWizardLog {
         Ok(log.soundeo)
     }
 
+    /// Get a single track - Firebase first, fallback to local JSON
+    pub fn get_track_optimized(track_id: &str) -> DjWizardLogResult<Option<crate::soundeo::track::SoundeoTrack>> {
+        // Try Firebase first (blocking async call)
+        if let Ok(firebase_track) = Self::try_get_track_from_firebase(track_id) {
+            return Ok(firebase_track);
+        }
+        
+        // Fallback to local JSON
+        let soundeo = Self::get_soundeo()?;
+        Ok(soundeo.tracks_info.get(track_id).cloned())
+    }
+
+    /// Get multiple tracks - Firebase first, fallback to local JSON
+    pub fn get_tracks_optimized(track_ids: &[String]) -> DjWizardLogResult<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>> {
+        // Try Firebase first (blocking async call)
+        if let Ok(firebase_tracks) = Self::try_get_tracks_from_firebase(track_ids) {
+            return Ok(firebase_tracks);
+        }
+        
+        // Fallback to local JSON
+        let soundeo = Self::get_soundeo()?;
+        let mut tracks = std::collections::HashMap::new();
+        for track_id in track_ids {
+            if let Some(track) = soundeo.tracks_info.get(track_id) {
+                tracks.insert(track_id.clone(), track.clone());
+            }
+        }
+        Ok(tracks)
+    }
+
+    fn try_get_track_from_firebase(track_id: &str) -> Result<Option<crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
+        use crate::auth::{firebase_client::FirebaseClient, google_auth::GoogleAuth};
+        
+        // Use tokio::task::block_in_place for compatibility with sync methods
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Get track from Firebase
+                firebase_client.get_track(track_id).await.map_err(|_| "Track fetch failed")
+            })
+        })?)
+    }
+
+    fn try_get_tracks_from_firebase(track_ids: &[String]) -> Result<std::collections::HashMap<String, crate::soundeo::track::SoundeoTrack>, Box<dyn std::error::Error>> {
+        use crate::auth::{firebase_client::FirebaseClient, google_auth::GoogleAuth};
+        
+        // Use tokio::task::block_in_place for compatibility with sync methods
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Load auth token
+                let auth_token = GoogleAuth::load_token().map_err(|_| "No auth")?;
+                
+                // Create Firebase client
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                
+                // Get tracks from Firebase
+                firebase_client.get_tracks(track_ids).await.map_err(|_| "Tracks fetch failed")
+            })
+        })?)
+    }
+
     pub fn get_url_list() -> DjWizardLogResult<HashSet<String>> {
         let log = Self::read_log()?;
         Ok(log.url_list)

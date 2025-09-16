@@ -62,6 +62,15 @@ impl SoundeoTrack {
         }
     }
     pub async fn get_info(&mut self, soundeo_user: &SoundeoUser, print: bool) -> SoundeoResult<()> {
+        // Try Firebase first (if available), fallback to local JSON
+        if let Ok(firebase_track) = self.get_info_from_firebase().await {
+            if let Some(full_info) = firebase_track {
+                self.clone_from(&full_info);
+                return Ok(());
+            }
+        }
+        
+        // Fallback to local JSON
         let soundeo = DjWizardLog::get_soundeo().change_context(SoundeoError)?;
         return match soundeo.tracks_info.get(&self.id) {
             Some(full_info) => {
@@ -132,6 +141,29 @@ impl SoundeoTrack {
                 let message = flash.get("message").unwrap().to_string();
                 return Err(Report::new(SoundeoError).attach(Suggestion(message)));
             }
+        }
+    }
+
+    async fn get_info_from_firebase(&self) -> SoundeoResult<Option<SoundeoTrack>> {
+        // Try to get Firebase client and fetch track
+        use crate::auth::{firebase_client::FirebaseClient, google_auth::GoogleAuth};
+        
+        // Load auth token
+        let auth_token = match GoogleAuth::load_token() {
+            Ok(token) => token,
+            Err(_) => return Ok(None), // No auth, fallback to local
+        };
+        
+        // Create Firebase client
+        let firebase_client = match FirebaseClient::new(auth_token).await {
+            Ok(client) => client,
+            Err(_) => return Ok(None), // Firebase unavailable, fallback to local
+        };
+        
+        // Get track from Firebase
+        match firebase_client.get_track(&self.id).await {
+            Ok(track) => Ok(track),
+            Err(_) => Ok(None), // Track not in Firebase, fallback to local
         }
     }
 
