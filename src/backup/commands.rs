@@ -39,7 +39,17 @@ impl BackupCommands {
         
         println!("{}", "Successfully connected to Google Drive.".green());
 
-        Self::upload_log_to_drive(&hub, &user_config).await?;
+        match Self::upload_log_to_drive(&hub, &user_config).await {
+            Ok(()) => {},
+            Err(ref e) if e.to_string().contains("SERVICE_DISABLED") || e.to_string().contains("accessNotConfigured") => {
+                println!("{}", "❌ Google Drive API is not enabled in your Google Cloud project.".yellow());
+                println!("{}", "Please enable it by visiting:".yellow());
+                println!("{}", "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=84904078589".cyan());
+                println!("{}", "After enabling, wait a few minutes and try again.".yellow());
+                return Err(Report::new(BackupError).attach_printable("Google Drive API not enabled"));
+            }
+            Err(e) => return Err(e),
+        }
 
         Ok(())
     }
