@@ -151,6 +151,17 @@ impl DjWizardLog {
         }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
     }
 
+    /// Get a specific soundeo track by ID from Firebase
+    pub fn get_soundeo_track_by_id(track_id: &str) -> DjWizardLogResult<Option<crate::soundeo::track::SoundeoTrack>> {
+        Ok(tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let auth_token = GoogleAuth::load_token().await.map_err(|_| "No auth")?;
+                let firebase_client = FirebaseClient::new(auth_token).await.map_err(|_| "Firebase unavailable")?;
+                firebase_client.get_soundeo_track(track_id).await.map_err(|_| "Failed to get soundeo track from Firebase")
+            })
+        }).map_err(|_: &str| error_stack::Report::new(DjWizardLogError))?)
+    }
+
     pub fn get_url_list() -> DjWizardLogResult<HashSet<String>> {
         // Use Firebase only - no fallback to local
         Ok(tokio::task::block_in_place(|| {

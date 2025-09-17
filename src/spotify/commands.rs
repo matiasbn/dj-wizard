@@ -135,7 +135,6 @@ impl SpotifyCommands {
         // --- Auto-queue any paired tracks that are not yet in the queue ---
         println!("\nChecking for paired tracks that need to be queued...");
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(SpotifyError)?;
 
         let queued_ids: HashSet<String> =
@@ -148,8 +147,8 @@ impl SpotifyCommands {
             .filter(|soundeo_id| {
                 // Condition: Not in queue AND not already downloaded
                 !queued_ids.contains(*soundeo_id)
-                    && soundeo_tracks_info
-                        .get(*soundeo_id)
+                    && DjWizardLog::get_soundeo_track_by_id(soundeo_id)
+                        .unwrap_or(None)
                         .map_or(true, |info| !info.already_downloaded)
             })
             .cloned()
@@ -615,7 +614,6 @@ impl SpotifyCommands {
             SpotifyPlaylist::prompt_select_playlist("Select the playlist to queue tracks from")?;
 
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
 
         let all_paired_ids: Vec<String> = playlist
             .tracks
@@ -637,8 +635,8 @@ impl SpotifyCommands {
         let soundeo_ids_to_queue: Vec<String> = all_paired_ids
             .iter()
             .filter(|soundeo_id| {
-                soundeo_tracks_info
-                    .get(*soundeo_id)
+                DjWizardLog::get_soundeo_track_by_id(soundeo_id)
+                    .unwrap_or(None)
                     .map_or(true, |track_info| !track_info.already_downloaded)
             })
             .cloned()
@@ -709,13 +707,12 @@ impl SpotifyCommands {
             .filter(|(spotify_id, _)| playlist.tracks.contains_key(spotify_id))
             .filter_map(|(_, soundeo_id)| soundeo_id)
             .collect::<Vec<_>>();
-        let soundeo = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
-        let mut downloaded_tracks = soundeo
-            .into_iter()
-            .filter(|(soundeo_track_id, _)| {
-                spotify_mapped_tracks.contains(&soundeo_track_id.clone())
-            })
-            .collect::<Vec<_>>();
+        let mut downloaded_tracks: Vec<(String, crate::soundeo::track::SoundeoTrack)> = Vec::new();
+        for soundeo_track_id in &spotify_mapped_tracks {
+            if let Some(track) = DjWizardLog::get_soundeo_track_by_id(soundeo_track_id).change_context(SpotifyError)? {
+                downloaded_tracks.push((soundeo_track_id.clone(), track));
+            }
+        }
         downloaded_tracks.sort_by_key(|(_, soundeo_track)| soundeo_track.title.clone());
         println!(
             "Playlist {} has {} tracks, {} were already downloaded",
@@ -895,7 +892,6 @@ impl SpotifyCommands {
     fn get_playlists_status() -> SpotifyResult<()> {
         // 1. Load all necessary data from the logs
         let spotify_log = DjWizardLog::get_spotify().change_context(SpotifyError)?;
-        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(SpotifyError)?;
 
         if spotify_log.playlists.is_empty() {
@@ -934,8 +930,8 @@ impl SpotifyCommands {
                     }
                     Some(Some(soundeo_id)) => {
                         // Successfully paired, now check its status
-                        if soundeo_tracks_info
-                            .get(soundeo_id)
+                        if DjWizardLog::get_soundeo_track_by_id(soundeo_id)
+                            .unwrap_or(None)
                             .map_or(false, |info| info.already_downloaded)
                         {
                             downloaded += 1;
@@ -1518,7 +1514,6 @@ impl SpotifyCommands {
         println!("Found {} local .AIFF files in total.", local_files.len());
 
         // Phase 2: Processing and Classification
-        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SpotifyError)?;
         let mut tracks_to_force_redownload: Vec<SoundeoTrack> = Vec::new();
         let mut tracks_to_report_missing: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -1538,7 +1533,7 @@ impl SpotifyCommands {
                     .soundeo_track_ids
                     .get(&spotify_track.spotify_track_id)
                 {
-                    if let Some(soundeo_track) = soundeo_tracks_info.get(soundeo_id) {
+                    if let Some(soundeo_track) = DjWizardLog::get_soundeo_track_by_id(soundeo_id).change_context(SpotifyError)? {
                         let expected_filename = format!("{}.AIFF", soundeo_track.title);
 
                         if let Some(source_path) = local_files.get(&expected_filename) {

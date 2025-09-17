@@ -73,11 +73,10 @@ impl SoundeoTrack {
             }
         }
         
-        // Fallback to Firebase
-        let soundeo_tracks_info = DjWizardLog::get_soundeo_tracks_info().change_context(SoundeoError)?;
-        return match soundeo_tracks_info.get(&self.id) {
+        // Fallback to Firebase - get specific track by ID
+        return match DjWizardLog::get_soundeo_track_by_id(&self.id).change_context(SoundeoError)? {
             Some(full_info) => {
-                self.clone_from(full_info);
+                self.clone_from(&full_info);
                 Ok(())
             }
             None => {
