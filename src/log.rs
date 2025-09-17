@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fmt, fs};
 
+use crate::artist::{ArtistCRUD, ArtistManager};
 use crate::url_list::UrlListCRUD;
 use colored::Colorize;
 use error_stack::{IntoReport, Report, ResultExt};
@@ -18,6 +19,7 @@ use crate::soundeo::{Soundeo, SoundeoCRUD};
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::spotify::{Spotify, SpotifyCRUD};
 use crate::user::{IPFSConfig, SoundeoUser, User};
+use crate::genre_tracker::{GenreTracker, GenreTrackerCRUD};
 
 #[derive(Debug)]
 pub struct DjWizardLogError;
@@ -55,6 +57,10 @@ pub struct DjWizardLog {
     pub url_list: HashSet<String>,
     pub spotify: Spotify,
     pub soundeo: Soundeo,
+    #[serde(default)]
+    pub genre_tracker: GenreTracker,
+    #[serde(default)]
+    pub artist_manager: ArtistManager,
 }
 
 impl DjWizardLog {
@@ -81,6 +87,11 @@ impl DjWizardLog {
     pub fn get_url_list() -> DjWizardLogResult<HashSet<String>> {
         let log = Self::read_log()?;
         Ok(log.url_list)
+    }
+
+    pub fn get_genre_tracker() -> DjWizardLogResult<GenreTracker> {
+        let log = Self::read_log()?;
+        Ok(log.genre_tracker)
     }
 
     fn read_log() -> DjWizardLogResult<Self> {
@@ -165,6 +176,8 @@ impl DjWizardLog {
                 spotify: Spotify::new(),
                 available_tracks: HashSet::new(),
                 url_list: HashSet::new(),
+                genre_tracker: GenreTracker::new(),
+                artist_manager: ArtistManager::new(),
             }
         };
         Ok(soundeo_log)
@@ -494,6 +507,44 @@ impl UrlListCRUD for DjWizardLog {
         let result = log.url_list.remove(&soundeo_url);
         log.save_log()?;
         Ok(result)
+    }
+}
+
+impl GenreTrackerCRUD for DjWizardLog {
+    fn get_genre_tracker() -> DjWizardLogResult<GenreTracker> {
+        let log = Self::read_log()?;
+        Ok(log.genre_tracker)
+    }
+
+    fn save_genre_tracker(tracker: GenreTracker) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.genre_tracker = tracker;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        log.save_log()?;
+        Ok(())
+    }
+}
+
+impl ArtistCRUD for DjWizardLog {
+    fn get_artist_manager() -> DjWizardLogResult<ArtistManager> {
+        let log = Self::read_log()?;
+        Ok(log.artist_manager)
+    }
+
+    fn save_artist_manager(manager: ArtistManager) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        log.artist_manager = manager;
+        log.save_log()?;
+        Ok(())
     }
 }
 

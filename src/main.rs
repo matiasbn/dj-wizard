@@ -6,9 +6,11 @@ use error_stack::fmt::{Charset, ColorMode};
 use error_stack::{FutureExt, IntoReport, Report, ResultExt};
 use native_dialog::FileDialog;
 
+use crate::artist::commands::ArtistCommands;
 use crate::backup::commands::BackupCommands;
 use crate::cleaner::clean_repeated_files;
 use crate::dialoguer::Dialoguer;
+use crate::genre_tracker::commands::GenreTrackerCommands;
 use crate::log::DjWizardLog;
 use crate::queue::commands::QueueCommands;
 use crate::soundeo::track::SoundeoTrack;
@@ -16,11 +18,13 @@ use crate::spotify::commands::{SpotifyCli, SpotifyCommands};
 use crate::url_list::commands::UrlListCommands;
 use crate::user::{SoundeoUser, User};
 
+mod artist;
 mod backup;
 mod cleaner;
 mod config;
 mod dialoguer;
 mod errors;
+mod genre_tracker;
 mod ipfs;
 mod log;
 mod queue;
@@ -74,6 +78,10 @@ enum DjWizardCommands {
     Spotify(SpotifyCli),
     /// Backup the log file to the cloud
     Backup,
+    /// Track available tracks by genre
+    Genre,
+    /// Manage favorite artists
+    Artist,
 }
 
 impl DjWizardCommands {
@@ -200,6 +208,15 @@ impl DjWizardCommands {
                     .change_context(DjWizardError)
                     .await
             }
+            DjWizardCommands::Genre => {
+                GenreTrackerCommands::execute()
+                    .change_context(DjWizardError)
+                    .await
+            }
+            DjWizardCommands::Artist => {
+                ArtistCommands::execute()
+                    .change_context(DjWizardError)
+            }
         };
     }
 
@@ -231,6 +248,12 @@ impl DjWizardCommands {
             }
             DjWizardCommands::Backup => {
                 format!("dj-wizard backup")
+            }
+            DjWizardCommands::Genre => {
+                format!("dj-wizard genre")
+            }
+            DjWizardCommands::Artist => {
+                format!("dj-wizard artist")
             }
         }
     }
