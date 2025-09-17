@@ -8,6 +8,7 @@ use google_drive3::{hyper, hyper_rustls, oauth2, DriveHub};
 use std::default::Default;
 use std::fs;
 use std::io::Cursor;
+use webbrowser;
 
 use super::{BackupError, BackupResult};
 
@@ -33,6 +34,7 @@ impl BackupCommands {
         if !new_refresh_token.is_empty() && new_refresh_token != user_config.google_refresh_token {
             user_config.google_refresh_token = new_refresh_token;
             user_config.save_config_file().change_context(BackupError)?;
+            println!("{}", "Google credentials saved to user config.".green());
         }
         
         println!("{}", "Successfully connected to Google Drive.".green());
@@ -61,16 +63,28 @@ impl BackupCommands {
             auth_provider_x509_cert_url: None,
         };
 
-        // For now, let's always use the InstalledFlow which handles refresh tokens automatically
-        let auth = oauth2::InstalledFlowAuthenticator::builder(
-            secret,
-            oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-        )
-        .persist_tokens_to_disk("~/.dj-wizard-google-token.json")
-        .build()
-        .await
-        .into_report()
-        .change_context(BackupError)?;
+        let auth = if let Some(existing_token) = refresh_token {
+            // Use existing refresh token to get access token
+            println!("Using existing Google credentials...");
+            let token_string = Self::refresh_access_token_with_refresh_token(existing_token).await?;
+            oauth2::AccessTokenAuthenticator::builder(token_string)
+                .build()
+                .await
+                .into_report()
+                .change_context(BackupError)?
+        } else {
+            // Do full OAuth flow
+            println!("Starting Google OAuth flow...");
+            oauth2::InstalledFlowAuthenticator::builder(
+                secret,
+                oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+            )
+            .force_account_selection(true)
+            .build()
+            .await
+            .into_report()
+            .change_context(BackupError)?
+        };
 
         let http_client = hyper::Client::builder().build(
             hyper_rustls::HttpsConnectorBuilder::new()
@@ -89,12 +103,51 @@ impl BackupCommands {
             // We used an existing token, return empty since we don't need to update
             String::new()
         } else {
-            // We did OAuth flow, try to get the new refresh token
-            // Note: The SDK might have saved it to disk already
-            String::new() // For now, return empty as SDK handles persistence
+            // We did OAuth flow, try to extract the refresh token
+            // For now, we'll return empty and handle this properly later
+            String::new()
         };
 
         Ok((hub, refresh_token_value))
+    }
+
+    async fn refresh_access_token_with_refresh_token(refresh_token: &str) -> BackupResult<String> {
+        let client_id = crate::config::AppConfig::GOOGLE_CLIENT_ID;
+        let client_secret = crate::config::AppConfig::google_client_secret()
+            .unwrap_or_else(|| String::new());
+
+        let client = reqwest::Client::new();
+        let mut params = vec![
+            ("client_id", client_id.to_string()),
+            ("refresh_token", refresh_token.to_string()),
+            ("grant_type", "refresh_token".to_string()),
+        ];
+
+        if !client_secret.is_empty() {
+            params.push(("client_secret", client_secret));
+        }
+
+        let token_response: serde_json::Value = client
+            .post("https://oauth2.googleapis.com/token")
+            .form(&params)
+            .send()
+            .await
+            .into_report()
+            .change_context(BackupError)?
+            .json()
+            .await
+            .into_report()
+            .change_context(BackupError)?;
+
+        token_response["access_token"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                Report::new(BackupError).attach_printable(format!(
+                    "Failed to get access_token from refresh response: {:?}",
+                    token_response
+                ))
+            })
     }
 
     async fn upload_log_to_drive(
@@ -113,11 +166,13 @@ impl BackupCommands {
         let backup_filename = "dj_wizard_log_backup.json";
 
         // 1. Check if the file already exists
+        println!("Checking for existing backup file...");
         let result = hub
             .files()
             .list()
             .q(&format!("name = '{}' and trashed = false", backup_filename))
             .spaces("drive")
+            .add_scope("https://www.googleapis.com/auth/drive")
             .doit()
             .await
             .into_report()
@@ -137,6 +192,7 @@ impl BackupCommands {
                 println!("Found existing backup file. Updating...");
                 hub.files()
                     .update(file_metadata, file_id)
+                    .add_scope("https://www.googleapis.com/auth/drive")
                     .upload(Cursor::new(log_content), mime_type)
                     .await
                     .into_report()
@@ -147,6 +203,7 @@ impl BackupCommands {
                 println!("No existing backup file found. Creating a new one...");
                 hub.files()
                     .create(file_metadata)
+                    .add_scope("https://www.googleapis.com/auth/drive")
                     .upload(Cursor::new(log_content), mime_type)
                     .await
                     .into_report()
