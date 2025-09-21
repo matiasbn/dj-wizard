@@ -239,6 +239,13 @@ impl QueueCommands {
                 continue;
             }
 
+            // Check if track is downloadable before trying to get download URL
+            if !track_info.downloadable {
+                track_info.print_not_downloadable();
+                println!("Skipping track as it's not downloadable");
+                continue;
+            }
+            
             println!(
                 "Adding {} to the available tracks queue",
                 track_info.title.cyan()
@@ -322,6 +329,21 @@ impl QueueCommands {
                 .get_info(&soundeo_user, true)
                 .await
                 .change_context(QueueError)?;
+            
+            // Check if track is downloadable, if not, remove from queue
+            if !track_info.downloadable {
+                println!(
+                    "{}/{}: Track {} is not downloadable, removing from queue",
+                    track_id_index + 1,
+                    queued_tracks_length,
+                    track_info.title.red()
+                );
+                track_info.print_not_downloadable();
+                DjWizardLog::remove_queued_track(queued_track.track_id.clone())
+                    .change_context(QueueError)?;
+                continue;
+            }
+            
             let download_url_result = track_info.get_download_url(&mut soundeo_user).await;
             match download_url_result {
                 Ok(_) => {

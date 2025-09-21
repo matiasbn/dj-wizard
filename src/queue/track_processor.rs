@@ -23,7 +23,7 @@ impl TrackProcessor {
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
         let queued_ids: HashSet<String> = queued_tracks.iter().map(|t| t.track_id.clone()).collect();
-        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let _soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
 
         let total_tracks = track_ids.len();
         let mut total_added = 0;
@@ -80,6 +80,13 @@ impl TrackProcessor {
                 .get_info(soundeo_user, true)
                 .await
                 .change_context(QueueError)?;
+
+            // Check if track is downloadable before adding to queue
+            if !track_info.downloadable {
+                track_info.print_not_downloadable();
+                total_skipped += 1;
+                continue;
+            }
 
             // Check if already downloaded
             if track_info.already_downloaded {
