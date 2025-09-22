@@ -242,7 +242,9 @@ impl QueueCommands {
             // Check if track is downloadable before trying to get download URL
             if !track_info.downloadable {
                 track_info.print_not_downloadable();
-                println!("Skipping track as it's not downloadable");
+                println!("Skipping track {} ({}) as it's not downloadable", 
+                    track_info.title.yellow(), 
+                    track_info.get_track_url().yellow());
                 continue;
             }
             
@@ -333,10 +335,11 @@ impl QueueCommands {
             // Check if track is downloadable, if not, remove from queue
             if !track_info.downloadable {
                 println!(
-                    "{}/{}: Track {} is not downloadable, removing from queue",
+                    "{}/{}: Track {} ({}) is not downloadable, removing from queue",
                     track_id_index + 1,
                     queued_tracks_length,
-                    track_info.title.red()
+                    track_info.title.red(),
+                    track_info.get_track_url().yellow()
                 );
                 track_info.print_not_downloadable();
                 DjWizardLog::remove_queued_track(queued_track.track_id.clone())
@@ -375,10 +378,11 @@ impl QueueCommands {
                 }
                 _ => {
                     println!(
-                        "{}/{}: Track {} can't be downloaded now",
+                        "{}/{}: Track {} ({}) can't be downloaded now",
                         track_id_index + 1,
                         queued_tracks_length,
-                        track_info.title.yellow()
+                        track_info.title.yellow(),
+                        track_info.get_track_url().yellow()
                     );
                 }
             }
@@ -443,7 +447,9 @@ impl QueueCommands {
                 }
                 Err(error) => {
                     println!(
-                        "Track with id {} was not downloaded",
+                        "Track {} ({}) with id {} was not downloaded",
+                        track_info.title.red(),
+                        track_info.get_track_url().yellow(),
                         available_id.clone().red()
                     );
                     println!("Error: {:?}", error)
