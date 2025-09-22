@@ -2,10 +2,11 @@ use colored::Colorize;
 use error_stack::{IntoReport, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use strum::IntoEnumIterator;
 use tokio::sync::{Mutex, Semaphore};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use url::Url;
 
 use crate::artist::{ArtistCRUD, ArtistManager};
@@ -48,6 +49,74 @@ enum TrackProcessResult {
     },
 }
 
+#[derive(Debug, Clone)]
+enum TrackQueueResult {
+    Downloaded {
+        track_id: String,
+        title: String,
+    },
+    NotDownloadable {
+        track_id: String,
+        title: String,
+        track_url: String,
+    },
+    StemTrack {
+        track_id: String,
+        title: String,
+        track_url: String,
+    },
+    Failed {
+        track_id: String,
+        title: String,
+        track_url: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ProcessingStats {
+    total_tracks: usize,
+    processed: usize,
+    downloaded: usize,
+    failed: usize,
+    stem_tracks: usize,
+    not_downloadable: usize,
+}
+
+impl ProcessingStats {
+    fn new(total_tracks: usize) -> Self {
+        Self {
+            total_tracks,
+            processed: 0,
+            downloaded: 0,
+            failed: 0,
+            stem_tracks: 0,
+            not_downloadable: 0,
+        }
+    }
+    
+    fn get_remaining_downloads(&self, download_counter: usize) -> String {
+        format!(
+            "📊 Stats: {}/{} processed | {} downloaded | {} failed | {} stem | {} not-dl | {} downloads left",
+            self.processed,
+            self.total_tracks,
+            self.downloaded,
+            self.failed,
+            self.stem_tracks,
+            self.not_downloadable,
+            download_counter
+        )
+    }
+}
+
+struct WorkerState {
+    track_queue: Arc<Mutex<VecDeque<QueuedTrack>>>,
+    download_counter: Arc<AtomicUsize>,
+    stats: Arc<Mutex<ProcessingStats>>,
+    soundeo_user: Arc<Mutex<SoundeoUser>>,
+    stats_bar: ProgressBar,
+    worker_bars: Vec<ProgressBar>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum QueueCommands {
     ResumeQueue,
@@ -71,7 +140,7 @@ impl QueueCommands {
         return match Self::get_selection(selection) {
             QueueCommands::AddToQueueFromUrl => Self::add_to_queue_from_url(None, None).await,
             QueueCommands::AddToQueueFromUrlList => Self::add_to_queue_from_url_list().await,
-            QueueCommands::ResumeQueue => Self::resume_queue(resume_queue_flag).await,
+            QueueCommands::ResumeQueue => Self::resume_queue_parallel(resume_queue_flag).await,
             QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads_parallel().await,
             QueueCommands::GetQueueInfo => Self::get_queue_information(),
             QueueCommands::ManageQueue => Self::manage_queue().await,
@@ -528,6 +597,379 @@ impl QueueCommands {
                             );
                         }
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_single_track_for_queue(
+        queued_track: QueuedTrack,
+        track_index: usize,
+        total_tracks: usize,
+        soundeo_user: Arc<Mutex<SoundeoUser>>,
+    ) -> QueueResult<TrackQueueResult> {
+        let mut track_info = SoundeoTrack::new(queued_track.track_id.clone());
+        
+        // Get track info (this requires read access to the user)
+        {
+            let user = soundeo_user.lock().await;
+            track_info
+                .get_info(&user, true)
+                .await
+                .change_context(QueueError)?;
+        }
+        
+        // Check if track is downloadable, if not, remove from queue
+        if !track_info.downloadable {
+            println!(
+                "{}/{}: Track {} ({}) is not downloadable, removing from queue",
+                track_index + 1,
+                total_tracks,
+                track_info.title.red(),
+                track_info.get_track_url().yellow()
+            );
+            track_info.print_not_downloadable();
+            let title = track_info.title.clone();
+            let track_url = track_info.get_track_url();
+            return Ok(TrackQueueResult::NotDownloadable {
+                track_id: queued_track.track_id,
+                title,
+                track_url,
+            });
+        }
+        
+        // Try to get download URL (this requires mutable access to the user)
+        let download_url_result = {
+            let mut user = soundeo_user.lock().await;
+            track_info.get_download_url(&mut user).await
+        };
+        
+        match download_url_result {
+            Ok(_) => {
+                println!(
+                    "{}/{}: Track {} added to the available tracks",
+                    track_index + 1,
+                    total_tracks,
+                    track_info.title.green()
+                );
+                Ok(TrackQueueResult::Downloaded {
+                    track_id: queued_track.track_id,
+                    title: track_info.title,
+                })
+            }
+            Err(_) => {
+                // Check if track is STEM when download URL fails
+                let stem_check_result = {
+                    let user = soundeo_user.lock().await;
+                    track_info.is_stem(&user).await
+                };
+                
+                match stem_check_result {
+                    Ok(true) => {
+                        // Track is STEM - print specific message, mark as not downloadable, and remove from queue
+                        println!(
+                            "{}/{}: Track {} ({}) is a STEM file (not supported), removing from queue",
+                            track_index + 1,
+                            total_tracks,
+                            track_info.title.red(),
+                            track_info.get_track_url().yellow()
+                        );
+                        let title = track_info.title.clone();
+                        let track_url = track_info.get_track_url();
+                        Ok(TrackQueueResult::StemTrack {
+                            track_id: queued_track.track_id,
+                            title,
+                            track_url,
+                        })
+                    }
+                    Ok(false) | Err(_) => {
+                        // Track is not STEM or failed to check - show generic error (keep in queue)
+                        println!(
+                            "{}/{}: Track {} ({}) can't be downloaded now",
+                            track_index + 1,
+                            total_tracks,
+                            track_info.title.yellow(),
+                            track_info.get_track_url().yellow()
+                        );
+                        let title = track_info.title.clone();
+                        let track_url = track_info.get_track_url();
+                        Ok(TrackQueueResult::Failed {
+                            track_id: queued_track.track_id,
+                            title,
+                            track_url,
+                        })
+                    }
+                }
+            }
+        }
+    }
+
+    async fn worker_loop(
+        worker_id: usize,
+        state: Arc<WorkerState>,
+    ) -> QueueResult<()> {
+        loop {
+            // Update display: Worker X: Idle
+            state.worker_bars[worker_id].set_message(format!("⏳ Worker {}: Idle", worker_id + 1));
+            
+            // Take next track from queue
+            let track = {
+                let mut queue = state.track_queue.lock().await;
+                queue.pop_front()
+            };
+            
+            let track = match track {
+                Some(t) => t,
+                None => break, // No more tracks
+            };
+            
+            // Check downloads before processing
+            let current_downloads = state.download_counter.load(Ordering::SeqCst);
+            if current_downloads == 0 {
+                // Check server only when counter is 0
+                let (main, bonus) = {
+                    let mut user = state.soundeo_user.lock().await;
+                    user.check_remaining_downloads()
+                        .await
+                        .change_context(QueueError)?
+                };
+                
+                let real_downloads = main + bonus;
+                if real_downloads == 0 {
+                    // Put track back and finish
+                    state.track_queue.lock().await.push_front(track);
+                    state.worker_bars[worker_id].set_message(format!("⏸️  Worker {}: No downloads left", worker_id + 1));
+                    break;
+                }
+                state.download_counter.store(real_downloads as usize, Ordering::SeqCst);
+            }
+            
+            // Process track
+            let track_title = format!("'{}'", &track.track_id[..std::cmp::min(20, track.track_id.len())]);
+            state.worker_bars[worker_id].set_message(format!("🔄 Worker {}: Processing {}", worker_id + 1, track_title));
+            
+            let result = QueueCommands::process_single_track_for_queue(
+                track,
+                0, // Will be updated in stats
+                0, // Will be updated in stats
+                state.soundeo_user.clone(),
+            ).await?;
+            
+            // Update counters based on result
+            {
+                let mut stats = state.stats.lock().await;
+                stats.processed += 1;
+                
+                match &result {
+                    TrackQueueResult::Downloaded { .. } => {
+                        state.download_counter.fetch_sub(1, Ordering::SeqCst);
+                        stats.downloaded += 1;
+                        state.worker_bars[worker_id].set_message(format!("✅ Worker {}: Completed", worker_id + 1));
+                    }
+                    TrackQueueResult::NotDownloadable { .. } => {
+                        stats.not_downloadable += 1;
+                        state.worker_bars[worker_id].set_message(format!("🚫 Worker {}: Not downloadable", worker_id + 1));
+                    }
+                    TrackQueueResult::StemTrack { .. } => {
+                        stats.stem_tracks += 1;
+                        state.worker_bars[worker_id].set_message(format!("🎛️  Worker {}: STEM track", worker_id + 1));
+                    }
+                    TrackQueueResult::Failed { .. } => {
+                        stats.failed += 1;
+                        state.worker_bars[worker_id].set_message(format!("❌ Worker {}: Failed", worker_id + 1));
+                    }
+                }
+                
+                // Update stats display
+                let downloads_left = state.download_counter.load(Ordering::SeqCst);
+                state.stats_bar.set_message(stats.get_remaining_downloads(downloads_left));
+            }
+            
+            // Apply log changes
+            Self::apply_queue_batch_results(vec![result]).await?;
+        }
+        
+        state.worker_bars[worker_id].set_message(format!("✅ Worker {}: Finished", worker_id + 1));
+        Ok(())
+    }
+
+    async fn resume_queue_parallel(resume_queue_flag: bool) -> QueueResult<()> {
+        // If the resume queue flag is provided, skip the dialog to filter by genre
+        // since we need complete automation
+        let filtered_by_genre = if resume_queue_flag {
+            false
+        } else {
+            Dialoguer::select_yes_or_no("Do you want to filter by genre".to_string())
+                .change_context(QueueError)?
+        };
+        let mut queued_tracks = if filtered_by_genre {
+            Self::filter_queue()?
+        } else {
+            DjWizardLog::get_queued_tracks().change_context(QueueError)?
+        };
+
+        // Sort the queue by priority and then by order_key
+        queued_tracks.sort_by(|a, b| {
+            let priority_ord = a.priority.cmp(&b.priority);
+            if priority_ord != std::cmp::Ordering::Equal {
+                return priority_ord;
+            }
+            a.order_key.partial_cmp(&b.order_key).unwrap()
+        });
+
+        let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(QueueError)?;
+
+        // Get initial download count
+        let (main_downloads, bonus_downloads) = soundeo_user
+            .check_remaining_downloads()
+            .await
+            .change_context(QueueError)?;
+        let initial_downloads = main_downloads + bonus_downloads;
+
+        if initial_downloads == 0 {
+            println!("{}", "No downloads available, skipping queue processing".yellow());
+            return Ok(());
+        }
+
+        let total_tracks = queued_tracks.len();
+        println!(
+            "Processing {} tracks with 4 parallel workers",
+            format!("{}", total_tracks).cyan()
+        );
+
+        // Setup MultiProgress for fixed display
+        let multi_progress = MultiProgress::new();
+        
+        // Stats bar (line 1) - hidden progress, just for message display
+        let stats_bar = multi_progress.add(ProgressBar::hidden());
+        stats_bar.set_style(
+            ProgressStyle::with_template("{msg}")
+                .unwrap()
+        );
+        stats_bar.enable_steady_tick(std::time::Duration::from_millis(100));
+        
+        // Worker bars (lines 2-5) - hidden progress, just for message display
+        let worker_bars: Vec<ProgressBar> = (0..4)
+            .map(|i| {
+                let bar = multi_progress.add(ProgressBar::hidden());
+                bar.set_style(
+                    ProgressStyle::with_template("{msg}")
+                        .unwrap()
+                );
+                bar.set_message(format!("⏳ Worker {}: Idle", i + 1));
+                bar.enable_steady_tick(std::time::Duration::from_millis(100));
+                bar
+            })
+            .collect();
+
+        // Initialize shared state
+        let track_queue = Arc::new(Mutex::new(VecDeque::from(queued_tracks)));
+        let download_counter = Arc::new(AtomicUsize::new(initial_downloads as usize));
+        let stats = Arc::new(Mutex::new(ProcessingStats::new(total_tracks)));
+        let soundeo_user_shared = Arc::new(Mutex::new(soundeo_user));
+        
+        let state = Arc::new(WorkerState {
+            track_queue,
+            download_counter,
+            stats: stats.clone(),
+            soundeo_user: soundeo_user_shared.clone(),
+            stats_bar: stats_bar.clone(),
+            worker_bars,
+        });
+
+        // Initialize stats display
+        {
+            let stats_guard = stats.lock().await;
+            stats_bar.set_message(stats_guard.get_remaining_downloads(initial_downloads as usize));
+        }
+
+        // Spawn 4 workers
+        let mut worker_handles = Vec::new();
+        for worker_id in 0..4 {
+            let state_clone = state.clone();
+            let handle = tokio::spawn(async move {
+                Self::worker_loop(worker_id, state_clone).await
+            });
+            worker_handles.push(handle);
+        }
+
+        // Wait for all workers to complete
+        for handle in worker_handles {
+            handle.await.unwrap()?;
+        }
+
+        // Clear progress bars cleanly
+        for bar in &state.worker_bars {
+            bar.finish_and_clear();
+        }
+        state.stats_bar.finish_and_clear();
+        
+        // Print final summary
+        let final_stats = stats.lock().await;
+        println!("{}", "Queue processing completed!".green());
+        println!(
+            "📊 Final stats: {}/{} processed | {} downloaded | {} failed | {} stem | {} not-downloadable",
+            final_stats.processed,
+            final_stats.total_tracks,
+            final_stats.downloaded,
+            final_stats.failed,
+            final_stats.stem_tracks,
+            final_stats.not_downloadable
+        );
+
+        // Continue with downloading available tracks
+        let available_downloads = DjWizardLog::get_available_tracks().change_context(QueueError)?;
+
+        if available_downloads.is_empty() {
+            println!("{}", "No available tracks to download".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "\n{} tracks found, proceeding to download",
+            format!("{}", available_downloads.len()).cyan()
+        );
+        println!("Downloading from the {} queue", "available tracks".green());
+
+        // Extract the user for downloading phase
+        let mut soundeo_user_final = {
+            let user_guard = soundeo_user_shared.lock().await;
+            user_guard.clone()
+        };
+
+        Self::download_available_tracks(&mut soundeo_user_final).await?;
+        Ok(())
+    }
+
+    async fn apply_queue_batch_results(results: Vec<TrackQueueResult>) -> QueueResult<()> {
+        let log_mutex = Arc::new(Mutex::new(()));
+        
+        for result in results {
+            let _lock = log_mutex.lock().await;
+            match result {
+                TrackQueueResult::Downloaded { track_id, title: _ } => {
+                    DjWizardLog::add_available_track(track_id.clone())
+                        .change_context(QueueError)?;
+                    DjWizardLog::remove_queued_track(track_id.clone())
+                        .change_context(QueueError)?;
+                }
+                TrackQueueResult::NotDownloadable { track_id, title: _, track_url: _ } => {
+                    DjWizardLog::remove_queued_track(track_id.clone())
+                        .change_context(QueueError)?;
+                }
+                TrackQueueResult::StemTrack { track_id, title: _, track_url: _ } => {
+                    DjWizardLog::mark_track_as_not_downloadable(track_id.clone())
+                        .change_context(QueueError)?;
+                    DjWizardLog::remove_queued_track(track_id.clone())
+                        .change_context(QueueError)?;
+                }
+                TrackQueueResult::Failed { track_id: _, title: _, track_url: _ } => {
+                    // Keep track in queue - no action needed
                 }
             }
         }
