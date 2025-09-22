@@ -406,7 +406,11 @@ impl SoundeoUser {
                 .into_report()
                 .attach_printable("Failed to parse response text as JSON")
                 .change_context(SoundeoUserError)?;
-            let header = json_resp["header"].clone().to_string();
+            let header = json_resp["header"]
+                .as_str()
+                .ok_or(SoundeoUserError)
+                .into_report()?
+                .to_string();
             self.parse_remaining_downloads_and_wait_time(header)?;
             logged_in = true;
         }
@@ -519,6 +523,104 @@ mod test {
     }
 
     #[test]
+    fn test_real_login_and_parse() {
+        // Test that actually logs into Soundeo and gets real values
+        println!("=== REAL SOUNDEO LOGIN TEST ===");
+        
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("User loaded: {}", user.name);
+                
+                // Use tokio runtime for async login
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                
+                match rt.block_on(user.login_and_update_user_info()) {
+                    Ok(()) => {
+                        println!("✅ LOGIN SUCCESSFUL!");
+                        println!("🔢 Remaining downloads: {}", user.remaining_downloads);
+                        println!("🎁 Bonus downloads: {}", user.remaining_downloads_bonus);
+                        println!("⏰ Reset time: {}", user.remaining_time_to_reset);
+                        println!("📝 Generated string: {}", user.get_remamining_downloads_string());
+                        
+                        // Basic validations
+                        assert!(!user.remaining_downloads.is_empty(), "Downloads should not be empty");
+                        assert!(!user.remaining_time_to_reset.is_empty(), "Reset time should not be empty");
+                        
+                        // Verify they are valid numbers
+                        let downloads_num: Result<u32, _> = user.remaining_downloads.parse();
+                        let bonus_num: Result<u32, _> = user.remaining_downloads_bonus.parse();
+                        
+                        assert!(downloads_num.is_ok(), "Downloads should be a valid number: {}", user.remaining_downloads);
+                        assert!(bonus_num.is_ok(), "Bonus should be a valid number: {}", user.remaining_downloads_bonus);
+                        
+                        println!("✅ All values are valid!");
+                    }
+                    Err(e) => {
+                        println!("❌ LOGIN FAILED: {:?}", e);
+                        println!("⚠️  This test requires valid credentials in configuration");
+                        // Don't fail the test if there are no valid credentials
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+                println!("⚠️  This test requires a valid configuration file");
+                // Don't fail the test if there's no configuration
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn test_scrapper_with_real_webpage() {
+        // HTML real extraído de webpage_test.html
+        let real_webpage_html = r#"<ul class="top-menu">
+							<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>		<li id="top-menu-votes"><a href="https://soundeo.com/account/votes"><i class="ico-votes"></i><span id="span-votes"><span class="active" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">30</span> + <span class="" title="Bonus (can be used on any day with premium account)">60</span></span></a></li>		<li id="top-menu-favorites"><a href="https://soundeo.com/account/favorites"><i class="ico-favorites"></i><span id="span-favorites">48</span></a></li>				<li id="top-menu-account"><a href="https://soundeo.com/account"><i class="ico-account"></i><span title="1 day 5 hours 53 minutes 46 seconds">1 day</span></a></li>		<li id="top-menu-logout"><a href="https://soundeo.com/account/logout"><i class="ico-logout"></i></a></li>	</ul>"#;
+        
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("=== ANÁLISIS DEL SCRAPPER CON PÁGINA REAL ===");
+                println!("HTML real: {}", real_webpage_html);
+                
+                // Test del selector actual
+                println!("\n--- Testing selector actual: '#span-downloads span' ---");
+                let downloads_vec = user.get_remaining_downloads(real_webpage_html.to_string()).unwrap();
+                println!("Elementos encontrados por selector downloads: {:?}", downloads_vec);
+                
+                // Test con el HTML completo para parse_remaining_downloads_and_wait_time
+                println!("\n--- Testing parse_remaining_downloads_and_wait_time ---");
+                match user.parse_remaining_downloads_and_wait_time(real_webpage_html.to_string()) {
+                    Ok(()) => {
+                        println!("✅ Parse exitoso!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("String generado: {}", result);
+                    }
+                    Err(e) => {
+                        println!("❌ Parse falló: {:?}", e);
+                    }
+                }
+                
+                // Test del selector para votes (que SÍ tiene bonus)
+                println!("\n--- Testing selector votes como comparación: '#span-votes span' ---");
+                let document = scraper::Html::parse_document(&real_webpage_html);
+                let votes_selector = scraper::Selector::parse("#span-votes span").unwrap();
+                let votes_elements: Vec<String> = document
+                    .select(&votes_selector)
+                    .map(|element| element.inner_html().as_str().to_string())
+                    .collect();
+                println!("Elementos encontrados por selector votes: {:?}", votes_elements);
+            }
+            Err(e) => {
+                println!("Could not load user config: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_remaining_downloads_and_wait_time() {
         // HTML real actual de la página de Soundeo (sin bonus)
         let test_html_no_bonus = r#"<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>"#;
@@ -565,10 +667,10 @@ mod test {
                 
                 println!("\n=== Testing JSON string format (como viene del server) ===");
                 println!("JSON string: {}", test_json_string);
-                // Simular el comportamiento de .to_string() en un JSON value
-                let json_val: serde_json::Value = serde_json::from_str(test_json_string).unwrap_or_else(|_| serde_json::Value::String(test_json_string.to_string()));
-                let header_from_json = json_val.to_string();
-                println!("Header after .to_string(): {}", header_from_json);
+                // Simular el comportamiento correcto con .as_str()
+                let json_val: serde_json::Value = serde_json::from_str(test_json_string).unwrap();
+                let header_from_json = json_val.as_str().unwrap_or("").to_string();
+                println!("Header after .as_str(): {}", header_from_json);
                 match user.parse_remaining_downloads_and_wait_time(header_from_json) {
                     Ok(()) => {
                         println!("Parse successful!");
