@@ -50,16 +50,16 @@ pub fn detect_stem(api_response: &str) -> SoundeoResult<bool> {
     let json: Value = serde_json::from_str(api_response)
         .into_report()
         .change_context(SoundeoError)?;
-    
+
     let track = &json["track"];
-    
+
     // Check if format1str is "STEM" AND format2 is null (only 1 format)
     if let Some(format1str) = track["format1str"].as_str() {
         if format1str == "STEM" && track["format2"].is_null() {
             return Ok(true);
         }
     }
-    
+
     Ok(false)
 }
 
@@ -149,7 +149,7 @@ impl SoundeoTrack {
                 // Download failed - check if it's because the track is STEM
                 let flash = flash_object.as_object().ok_or(SoundeoError).into_report()?;
                 let message = flash.get("message").unwrap().to_string();
-                
+
                 // Check if track is STEM before returning error
                 match self.is_stem(soundeo_user).await {
                     Ok(true) => {
@@ -193,20 +193,6 @@ impl SoundeoTrack {
         print_remaining_downloads: bool,
         force_redownload: bool,
     ) -> SoundeoResult<()> {
-        // Check remaining downloads before attempting download
-        let (main_downloads, bonus_downloads) = soundeo_user
-            .check_remaining_downloads()
-            .await
-            .change_context(SoundeoError)?;
-
-        if main_downloads + bonus_downloads == 0 {
-            println!(
-                "{}",
-                colored::Colorize::red("No downloads remaining. Download queue stopped.")
-            );
-            return Ok(());
-        }
-
         // Get info
         self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded
@@ -330,7 +316,7 @@ impl SoundeoTrack {
         .get(soundeo_user)
         .await
         .change_context(SoundeoError)?;
-        
+
         detect_stem(&api_response)
     }
 
@@ -378,7 +364,10 @@ mod tests {
                 soundeo_user.login_and_update_user_info().await.unwrap();
 
                 // Test STEM track
-                println!("\n🟡 === TESTING STEM TRACK (ID: {}) ===", test_track_id_stem);
+                println!(
+                    "\n🟡 === TESTING STEM TRACK (ID: {}) ===",
+                    test_track_id_stem
+                );
                 let api_response_stem = SoundeoAPI::GetTrackInfo {
                     track_id: test_track_id_stem.to_string(),
                 }
@@ -398,7 +387,10 @@ mod tests {
                 println!("{:#?}", track_stem);
 
                 // Test normal track
-                println!("\n🟢 === TESTING NORMAL TRACK (ID: {}) ===", test_track_id_not_stem);
+                println!(
+                    "\n🟢 === TESTING NORMAL TRACK (ID: {}) ===",
+                    test_track_id_not_stem
+                );
                 let api_response_normal = SoundeoAPI::GetTrackInfo {
                     track_id: test_track_id_not_stem.to_string(),
                 }
@@ -470,8 +462,15 @@ mod tests {
                 .unwrap();
 
                 let is_stem_result = detect_stem(&api_response_stem).unwrap();
-                println!("🟡 Track {} is STEM: {}", test_track_id_stem, is_stem_result);
-                assert!(is_stem_result, "Track {} should be detected as STEM", test_track_id_stem);
+                println!(
+                    "🟡 Track {} is STEM: {}",
+                    test_track_id_stem, is_stem_result
+                );
+                assert!(
+                    is_stem_result,
+                    "Track {} should be detected as STEM",
+                    test_track_id_stem
+                );
 
                 // Test normal track detection
                 let api_response_normal = SoundeoAPI::GetTrackInfo {
@@ -483,8 +482,15 @@ mod tests {
                 .unwrap();
 
                 let is_not_stem_result = detect_stem(&api_response_normal).unwrap();
-                println!("🟢 Track {} is STEM: {}", test_track_id_not_stem, is_not_stem_result);
-                assert!(!is_not_stem_result, "Track {} should NOT be detected as STEM", test_track_id_not_stem);
+                println!(
+                    "🟢 Track {} is STEM: {}",
+                    test_track_id_not_stem, is_not_stem_result
+                );
+                assert!(
+                    !is_not_stem_result,
+                    "Track {} should NOT be detected as STEM",
+                    test_track_id_not_stem
+                );
 
                 println!("✅ STEM detection working correctly!");
             }
