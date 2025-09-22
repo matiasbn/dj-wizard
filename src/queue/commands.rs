@@ -3,7 +3,9 @@ use error_stack::{IntoReport, ResultExt};
 use inflector::Inflector;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
+use tokio::sync::{Mutex, Semaphore};
 use url::Url;
 
 use crate::artist::{ArtistCRUD, ArtistManager};
@@ -17,6 +19,34 @@ use crate::soundeo::{Soundeo, SoundeoCRUD};
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::url_list::UrlListCRUD;
 use crate::user::SoundeoUser;
+
+#[derive(Debug, Clone)]
+enum TrackProcessResult {
+    Success {
+        track_id: String,
+        track_title: String,
+        was_queued: bool,
+    },
+    AlreadyDownloaded {
+        track_id: String,
+        track_title: String,
+    },
+    AlreadyAvailable {
+        track_id: String,
+        track_title: String,
+    },
+    NotDownloadable {
+        track_id: String,
+        track_title: String,
+        track_url: String,
+    },
+    Error {
+        track_id: String,
+        track_title: String,
+        error: String,
+        should_queue: bool,
+    },
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
 pub enum QueueCommands {
@@ -42,7 +72,7 @@ impl QueueCommands {
             QueueCommands::AddToQueueFromUrl => Self::add_to_queue_from_url(None, None).await,
             QueueCommands::AddToQueueFromUrlList => Self::add_to_queue_from_url_list().await,
             QueueCommands::ResumeQueue => Self::resume_queue(resume_queue_flag).await,
-            QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads().await,
+            QueueCommands::SaveToAvailableTracks => Self::add_to_available_downloads_parallel().await,
             QueueCommands::GetQueueInfo => Self::get_queue_information(),
             QueueCommands::ManageQueue => Self::manage_queue().await,
             QueueCommands::DownloadOnlyAvailableTracks => {
@@ -290,6 +320,220 @@ impl QueueCommands {
         Ok(())
     }
 
+    async fn process_single_track_for_available(
+        track_id: String,
+        track_index: usize,
+        total_tracks: usize,
+        soundeo_user: &SoundeoUser,
+        available_tracks: &HashSet<String>,
+        queued_tracks: &Vec<QueuedTrack>,
+        repeat_download: bool,
+    ) -> QueueResult<TrackProcessResult> {
+        println!(
+            "-----------------------------------------------------------------------------"
+        );
+        println!(
+            "Saving track {} of {}",
+            track_index + 1,
+            total_tracks
+        );
+
+        let mut track_info = SoundeoTrack::new(track_id.clone());
+        track_info
+            .get_info(soundeo_user, true)
+            .await
+            .change_context(QueueError)?;
+
+        if track_info.already_downloaded {
+            if !repeat_download {
+                track_info.print_already_downloaded();
+                return Ok(TrackProcessResult::AlreadyDownloaded {
+                    track_id,
+                    track_title: track_info.title,
+                });
+            } else {
+                track_info.print_downloading_again();
+                // Note: We don't reset here as it's expensive and causes race conditions
+                // The reset will happen during actual download
+            }
+        }
+
+        if available_tracks.contains(&track_id) {
+            track_info.print_already_available();
+            return Ok(TrackProcessResult::AlreadyAvailable {
+                track_id,
+                track_title: track_info.title,
+            });
+        }
+
+        // Check if track is downloadable before trying to get download URL
+        if !track_info.downloadable {
+            track_info.print_not_downloadable();
+            let track_title = track_info.title.clone();
+            let track_url = track_info.get_track_url();
+            return Ok(TrackProcessResult::NotDownloadable {
+                track_id,
+                track_title,
+                track_url,
+            });
+        }
+
+        println!(
+            "Adding {} to the available tracks queue",
+            track_info.title.cyan()
+        );
+
+        // Clone soundeo_user for this async operation
+        let mut user_clone = soundeo_user.clone();
+        let download_url_result = track_info.get_download_url(&mut user_clone).await;
+        
+        match download_url_result {
+            Ok(_) => {
+                let was_queued = queued_tracks.iter().any(|t| t.track_id == track_id);
+                Ok(TrackProcessResult::Success {
+                    track_id,
+                    track_title: track_info.title,
+                    was_queued,
+                })
+            }
+            Err(err) => {
+                Ok(TrackProcessResult::Error {
+                    track_id,
+                    track_title: track_info.title,
+                    error: format!("{:#?}", err),
+                    should_queue: true,
+                })
+            }
+        }
+    }
+
+    async fn add_to_available_downloads_parallel() -> QueueResult<()> {
+        let prompt_text = format!("Soundeo url: ");
+        let url = Dialoguer::input(prompt_text).change_context(QueueError)?;
+        let soundeo_url = Url::parse(&url).into_report().change_context(QueueError)?;
+        let mut soundeo_user = SoundeoUser::new().change_context(QueueError)?;
+        soundeo_user
+            .login_and_update_user_info()
+            .await
+            .change_context(QueueError)?;
+        let mut track_list =
+            SoundeoTracksList::new(soundeo_url.to_string()).change_context(QueueError)?;
+        track_list
+            .get_tracks_id(&soundeo_user)
+            .await
+            .change_context(QueueError)?;
+        println!(
+            "Saving {} tracks using 4 parallel workers",
+            format!("{}", track_list.track_ids.len()).cyan()
+        );
+
+        let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
+        let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
+
+        let prompt_text = format!("Do you want to download the already downloaded tracks again?");
+        let repeat_download =
+            Dialoguer::select_yes_or_no(prompt_text).change_context(QueueError)?;
+
+        println!(
+            "\n{}",
+            "If a track cannot be added to the collection, it will be added to the queue with High priority.".yellow()
+        );
+        let fallback_priority = Priority::High;
+
+        // Phase 1: Process tracks in parallel (HTTP requests only)
+        let semaphore = Arc::new(Semaphore::new(4));
+        let total_tracks = track_list.track_ids.len();
+        
+        let mut tasks = Vec::new();
+        for (index, track_id) in track_list.track_ids.into_iter().enumerate() {
+            let sem = semaphore.clone();
+            let user = soundeo_user.clone();
+            let available = available_tracks.clone();
+            let queued = queued_tracks.clone();
+            
+            let task = tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                QueueCommands::process_single_track_for_available(
+                    track_id,
+                    index,
+                    total_tracks,
+                    &user,
+                    &available,
+                    &queued,
+                    repeat_download,
+                ).await
+            });
+            tasks.push(task);
+        }
+        
+        let mut results = Vec::new();
+        for task in tasks {
+            results.push(task.await.unwrap()?);
+        }
+
+        // Phase 2: Apply changes to log in batches (synchronized)
+        QueueCommands::apply_batch_changes(results, fallback_priority).await
+    }
+
+    async fn apply_batch_changes(
+        results: Vec<TrackProcessResult>,
+        fallback_priority: Priority,
+    ) -> QueueResult<()> {
+        let log_mutex = Arc::new(Mutex::new(()));
+        
+        for result in results {
+            let _lock = log_mutex.lock().await;
+            match result {
+                TrackProcessResult::Success { track_id, track_title, was_queued } => {
+                    DjWizardLog::add_available_track(track_id.clone())
+                        .change_context(QueueError)?;
+                    if was_queued {
+                        DjWizardLog::remove_queued_track(track_id.clone())
+                            .change_context(QueueError)?;
+                        println!("Track removed from queue");
+                    }
+                    println!(
+                        "Track {} successfully added to the {} and available for download",
+                        track_title.green(),
+                        "Available tracks queue".green()
+                    );
+                }
+                TrackProcessResult::AlreadyDownloaded { track_title, .. } => {
+                    // Already printed in helper function
+                }
+                TrackProcessResult::AlreadyAvailable { track_title, .. } => {
+                    // Already printed in helper function
+                }
+                TrackProcessResult::NotDownloadable { track_id, track_title, track_url } => {
+                    println!("Skipping track {} ({}) as it's not downloadable", 
+                        track_title.yellow(), 
+                        track_url.yellow());
+                }
+                TrackProcessResult::Error { track_id, track_title, error, should_queue } => {
+                    println!("Error adding track to the collection:\n{}", error);
+                    if should_queue {
+                        println!("Adding to the queue with priority {:?}", fallback_priority);
+                        let queue_result =
+                            DjWizardLog::add_queued_track(track_id.clone(), fallback_priority)
+                                .change_context(QueueError)?;
+                        if queue_result {
+                            println!(
+                                "Track with id {} successfully queued",
+                                track_id.green(),
+                            );
+                        } else {
+                            println!(
+                                "Track with id {} was previously queued",
+                                track_id.yellow(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn resume_queue(resume_queue_flag: bool) -> QueueResult<()> {
         // If the resume queue flag is provided, skip the dialog to filter by genre
         // since we need complete automation
@@ -323,6 +567,7 @@ impl QueueCommands {
             "The queue has {} tracks still pending to download, collecting available downloads",
             format!("{}", queued_tracks.len()).cyan()
         );
+        println!("{}", soundeo_user.get_remamining_downloads_string());
 
         let queued_tracks_length = queued_tracks.len();
         for (track_id_index, queued_track) in queued_tracks.iter().enumerate() {
