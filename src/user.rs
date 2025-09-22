@@ -366,6 +366,44 @@ impl SoundeoUser {
         Ok(())
     }
 
+    pub async fn check_remaining_downloads(&mut self) -> SoundeoUserResult<(u32, u32)> {
+        let response = self.get_login_response().await?;
+        let response_text = response
+            .text()
+            .await
+            .into_report()
+            .attach_printable("Failed to retrieve response text for downloads check")
+            .change_context(SoundeoUserError)?;
+        let json_resp: Value = serde_json::from_str(&response_text)
+            .into_report()
+            .attach_printable("Failed to parse response text as JSON for downloads check")
+            .change_context(SoundeoUserError)?;
+        let header = json_resp["header"]
+            .as_str()
+            .ok_or(SoundeoUserError)
+            .into_report()?
+            .to_string();
+        
+        // Parse downloads using existing method
+        let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
+        
+        let main_downloads = remaining_downloads_vec[0].parse::<u32>()
+            .into_report()
+            .attach_printable("Failed to parse main downloads as number")
+            .change_context(SoundeoUserError)?;
+        
+        let bonus_downloads = if remaining_downloads_vec.len() == 2 {
+            remaining_downloads_vec[1].parse::<u32>()
+                .into_report()
+                .attach_printable("Failed to parse bonus downloads as number")
+                .change_context(SoundeoUserError)?
+        } else {
+            0
+        };
+        
+        Ok((main_downloads, bonus_downloads))
+    }
+
     pub async fn login_and_update_user_info(&mut self) -> SoundeoUserResult<()> {
         if self.cookie.is_empty() {
             println!("Logging in with {}", self.name.clone().green());
@@ -518,6 +556,42 @@ mod test {
             }
             Err(e) => {
                 println!("Error loading user config: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_check_remaining_downloads() {
+        // Test the new check_remaining_downloads method
+        println!("=== TESTING CHECK REMAINING DOWNLOADS ===");
+        
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("User loaded: {}", user.name);
+                
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                
+                match rt.block_on(user.check_remaining_downloads()) {
+                    Ok((main_downloads, bonus_downloads)) => {
+                        println!("✅ CHECK SUCCESSFUL!");
+                        println!("🔢 Main downloads: {}", main_downloads);
+                        println!("🎁 Bonus downloads: {}", bonus_downloads);
+                        println!("💯 Total downloads: {}", main_downloads + bonus_downloads);
+                        
+                        // Basic validations
+                        println!("✅ Downloads check completed!");
+                    }
+                    Err(e) => {
+                        println!("❌ CHECK FAILED: {:?}", e);
+                        println!("⚠️  This test requires valid credentials");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+                println!("⚠️  This test requires a valid configuration file");
+                return;
             }
         }
     }

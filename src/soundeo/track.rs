@@ -155,6 +155,20 @@ impl SoundeoTrack {
         print_remaining_downloads: bool,
         force_redownload: bool,
     ) -> SoundeoResult<()> {
+        // Check remaining downloads before attempting download
+        let (main_downloads, bonus_downloads) = soundeo_user
+            .check_remaining_downloads()
+            .await
+            .change_context(SoundeoError)?;
+        
+        if main_downloads + bonus_downloads == 0 {
+            println!(
+                "{}",
+                colored::Colorize::red("No downloads remaining. Download queue stopped.")
+            );
+            return Ok(());
+        }
+
         // Get info
         self.get_info(&soundeo_user, true).await?;
         // Check if can be downloaded

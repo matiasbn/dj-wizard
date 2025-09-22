@@ -344,6 +344,21 @@ impl QueueCommands {
                 continue;
             }
             
+            // Check remaining downloads before getting download URL (which consumes downloads)
+            let (main_downloads, bonus_downloads) = soundeo_user
+                .check_remaining_downloads()
+                .await
+                .change_context(QueueError)?;
+            
+            if main_downloads + bonus_downloads == 0 {
+                println!(
+                    "{}/{}: No downloads remaining. Stopping URL collection and proceeding with available tracks.",
+                    track_id_index + 1,
+                    queued_tracks_length
+                );
+                break;
+            }
+            
             let download_url_result = track_info.get_download_url(&mut soundeo_user).await;
             match download_url_result {
                 Ok(_) => {
