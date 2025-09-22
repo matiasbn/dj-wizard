@@ -833,6 +833,8 @@ impl QueueCommands {
                 "{}",
                 "No downloads available, skipping queue processing".yellow()
             );
+            // Skip queue processing but continue to download available tracks
+            Self::download_available_tracks(&mut soundeo_user).await?;
             return Ok(());
         }
 
