@@ -21,32 +21,43 @@ impl BackupCommands {
 
         // Create the hub with proper authentication
         println!("{}", "Connecting to Google Drive...".yellow());
-        
+
         let refresh_token = if user_config.google_refresh_token.is_empty() {
             None
         } else {
             Some(user_config.google_refresh_token.as_str())
         };
-        
+
         let (hub, new_refresh_token) = Self::create_authenticated_hub(refresh_token).await?;
-        
+
         // Save new refresh token if we got one from OAuth flow
         if !new_refresh_token.is_empty() && new_refresh_token != user_config.google_refresh_token {
             user_config.google_refresh_token = new_refresh_token;
             user_config.save_config_file().change_context(BackupError)?;
             println!("{}", "Google credentials saved to user config.".green());
         }
-        
+
         println!("{}", "Successfully connected to Google Drive.".green());
 
         match Self::upload_log_to_drive(&hub, &user_config).await {
-            Ok(()) => {},
-            Err(ref e) if e.to_string().contains("SERVICE_DISABLED") || e.to_string().contains("accessNotConfigured") => {
-                println!("{}", "❌ Google Drive API is not enabled in your Google Cloud project.".yellow());
+            Ok(()) => {}
+            Err(ref e)
+                if e.to_string().contains("SERVICE_DISABLED")
+                    || e.to_string().contains("accessNotConfigured") =>
+            {
+                println!(
+                    "{}",
+                    "❌ Google Drive API is not enabled in your Google Cloud project.".yellow()
+                );
                 println!("{}", "Please enable it by visiting:".yellow());
                 println!("{}", "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=84904078589".cyan());
-                println!("{}", "After enabling, wait a few minutes and try again.".yellow());
-                return Err(Report::new(BackupError).attach_printable("Google Drive API not enabled"));
+                println!(
+                    "{}",
+                    "After enabling, wait a few minutes and try again.".yellow()
+                );
+                return Err(
+                    Report::new(BackupError).attach_printable("Google Drive API not enabled")
+                );
             }
             Err(e) => return Err(e),
         }
@@ -76,7 +87,8 @@ impl BackupCommands {
         let auth = if let Some(existing_token) = refresh_token {
             // Use existing refresh token to get access token
             println!("Using existing Google credentials...");
-            let token_string = Self::refresh_access_token_with_refresh_token(existing_token).await?;
+            let token_string =
+                Self::refresh_access_token_with_refresh_token(existing_token).await?;
             oauth2::AccessTokenAuthenticator::builder(token_string)
                 .build()
                 .await
@@ -123,8 +135,8 @@ impl BackupCommands {
 
     async fn refresh_access_token_with_refresh_token(refresh_token: &str) -> BackupResult<String> {
         let client_id = crate::config::AppConfig::GOOGLE_CLIENT_ID;
-        let client_secret = crate::config::AppConfig::google_client_secret()
-            .unwrap_or_else(|| String::new());
+        let client_secret =
+            crate::config::AppConfig::google_client_secret().unwrap_or_else(|| String::new());
 
         let client = reqwest::Client::new();
         let mut params = vec![

@@ -414,34 +414,19 @@ impl SoundeoUser {
     }
 
     fn parse_remaining_downloads_and_wait_time(&mut self, header: String) -> SoundeoUserResult<()> {
-        // Example
-        // <span id='span-downloads'><span class=\"\" title=\"Main (will be reset in 2 hours 42 minutes 10 seconds)\">150</span></span>
-        let header_downloads_regex = regex!(
-            r#"<span id='span-downloads'>(.*?)<\/span>(?:\s*(?:\+\s*)?<span[^>]*>(.*?)<\/span>)?(<\/span>)?"#
-        );
+        // Examples:
+        // Without bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span>
+        // With bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus">300</span></span>
+        
+        // Extract the remaining time from the title attribute
+        let time_regex = regex!(r#"title="[^"]*will be reset in ([^")]+)"#);
+        let remaining_time = time_regex
+            .captures(&header)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
-        let downloads_header = header_downloads_regex
-            .find(&header)
-            .ok_or(SoundeoUserError)
-            .into_report()?
-            .as_str()
-            .to_string();
-
-        let mut downloads_header_split = downloads_header
-            .trim_start_matches(
-                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in ",
-            )
-            .trim_end_matches(r#"</span></span>"#,
-            )
-            .split(r#")\">"#);
-        let remaining_time = downloads_header_split
-            .next()
-            .ok_or(SoundeoUserError)
-            .into_report()?
-            .trim_start_matches(
-                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in "#,
-            )
-            .to_string();
+        // Extract downloads using the existing method
         let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
 
         self.remaining_downloads = remaining_downloads_vec[0].clone();
@@ -514,6 +499,93 @@ mod test {
 
         for number in numbers {
             println!("Number: {}", number);
+        }
+    }
+
+    #[test]
+    fn test_get_remamining_downloads_string() {
+        match SoundeoUser::new() {
+            Ok(user) => {
+                println!("User loaded successfully");
+                println!("remaining_downloads: {}", user.remaining_downloads);
+                println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                let result = user.get_remamining_downloads_string();
+                println!("Function result: {}", result);
+            }
+            Err(e) => {
+                println!("Error loading user config: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_remaining_downloads_and_wait_time() {
+        // HTML real actual de la página de Soundeo (sin bonus)
+        let test_html_no_bonus = r#"<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>"#;
+        
+        // HTML con bonus
+        let test_html_with_bonus = r#"<li id="top-menu-downloads"><a href="/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus (can be used on any day with premium account)">300</span></span></a></li>"#;
+        
+        // Test JSON string format (como viene del server)
+        let test_json_string = r#""<li id=\"top-menu-downloads\"><a href=\"/account/downloads\"><i class=\"ico-downloads\"></i><span id=\"span-downloads\"><span class=\"\" title=\"Main (will be reset in 18 hours 54 minutes 50 seconds)\">148</span></span></a></li>""#;
+        
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("=== Testing WITHOUT bonus ===");
+                println!("HTML: {}", test_html_no_bonus);
+                match user.parse_remaining_downloads_and_wait_time(test_html_no_bonus.to_string()) {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+                
+                println!("\n=== Testing WITH bonus ===");
+                println!("HTML: {}", test_html_with_bonus);
+                match user.parse_remaining_downloads_and_wait_time(test_html_with_bonus.to_string()) {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+                
+                println!("\n=== Testing JSON string format (como viene del server) ===");
+                println!("JSON string: {}", test_json_string);
+                // Simular el comportamiento de .to_string() en un JSON value
+                let json_val: serde_json::Value = serde_json::from_str(test_json_string).unwrap_or_else(|_| serde_json::Value::String(test_json_string.to_string()));
+                let header_from_json = json_val.to_string();
+                println!("Header after .to_string(): {}", header_from_json);
+                match user.parse_remaining_downloads_and_wait_time(header_from_json) {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Could not load user config: {:?}", e);
+            }
         }
     }
 }
