@@ -8,7 +8,6 @@ use google_drive3::{hyper, hyper_rustls, oauth2, DriveHub};
 use std::default::Default;
 use std::fs;
 use std::io::Cursor;
-use webbrowser;
 
 use super::{BackupError, BackupResult};
 
@@ -20,26 +19,14 @@ impl BackupCommands {
         user_config.read_config_file().change_context(BackupError)?;
 
         // Create the hub with proper authentication
-        println!("{}", "Connecting to Google Drive...".yellow());
-
-        let refresh_token = if user_config.google_refresh_token.is_empty() {
-            None
-        } else {
-            Some(user_config.google_refresh_token.as_str())
-        };
-
-        let (hub, new_refresh_token) = Self::create_authenticated_hub(refresh_token).await?;
-
-        // Save new refresh token if we got one from OAuth flow
-        if !new_refresh_token.is_empty() && new_refresh_token != user_config.google_refresh_token {
-            user_config.google_refresh_token = new_refresh_token;
-            user_config.save_config_file().change_context(BackupError)?;
-            println!("{}", "Google credentials saved to user config.".green());
-        }
-
+        println!("{}", "Connecting to Google Drive...".cyan());
+        let hub = Self::create_authenticated_hub().await?;
         println!("{}", "Successfully connected to Google Drive.".green());
 
-        match Self::upload_log_to_drive(&hub, &user_config).await {
+        match Self::upload_log_to_drive(&hub, &user_config)
+            .await
+            .change_context(BackupError)
+        {
             Ok(()) => {}
             Err(ref e)
                 if e.to_string().contains("SERVICE_DISABLED")
@@ -65,9 +52,7 @@ impl BackupCommands {
         Ok(())
     }
 
-    async fn create_authenticated_hub(
-        refresh_token: Option<&str>,
-    ) -> BackupResult<(DriveHub<HttpsConnector<HttpConnector>>, String)> {
+    async fn create_authenticated_hub() -> BackupResult<DriveHub<HttpsConnector<HttpConnector>>> {
         let client_id = crate::config::AppConfig::GOOGLE_CLIENT_ID;
         let client_secret =
             crate::config::AppConfig::google_client_secret().unwrap_or_else(|| String::new()); // Empty for PKCE
@@ -84,29 +69,32 @@ impl BackupCommands {
             auth_provider_x509_cert_url: None,
         };
 
-        let auth = if let Some(existing_token) = refresh_token {
-            // Use existing refresh token to get access token
-            println!("Using existing Google credentials...");
-            let token_string =
-                Self::refresh_access_token_with_refresh_token(existing_token).await?;
-            oauth2::AccessTokenAuthenticator::builder(token_string)
-                .build()
-                .await
-                .into_report()
-                .change_context(BackupError)?
-        } else {
-            // Do full OAuth flow
-            println!("Starting Google OAuth flow...");
-            oauth2::InstalledFlowAuthenticator::builder(
-                secret,
-                oauth2::InstalledFlowReturnMethod::HTTPRedirect,
-            )
-            .force_account_selection(true)
-            .build()
-            .await
-            .into_report()
+        // Define the path for the token cache file within the app's config directory.
+        let token_cache_path = User::get_config_file_path()
             .change_context(BackupError)?
-        };
+            .replace("config.json", "google_token_cache.json");
+
+        let auth = oauth2::InstalledFlowAuthenticator::builder(
+            secret,
+            oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+        )
+        .persist_tokens_to_disk(&token_cache_path)
+        .force_account_selection(true)
+        .build()
+        .await
+        .into_report()
+        .change_context(BackupError)?;
+
+        // The first time .token() is called, it will either use the cached token,
+        // refresh it, or start the full web-based authentication flow.
+        let scopes = &["https://www.googleapis.com/auth/drive.file"];
+        match auth.token(scopes).await {
+            Err(e) => {
+                return Err(Report::new(BackupError)
+                    .attach_printable(format!("Failed to get Google authentication token: {}", e)))
+            }
+            Ok(_) => println!("{}", "Google authentication successful.".green()),
+        }
 
         let http_client = hyper::Client::builder().build(
             hyper_rustls::HttpsConnectorBuilder::new()
@@ -120,62 +108,13 @@ impl BackupCommands {
 
         let hub = DriveHub::new(http_client, auth);
 
-        // Try to get the refresh token for saving
-        let refresh_token_value = if refresh_token.is_some() {
-            // We used an existing token, return empty since we don't need to update
-            String::new()
-        } else {
-            // We did OAuth flow, try to extract the refresh token
-            // For now, we'll return empty and handle this properly later
-            String::new()
-        };
-
-        Ok((hub, refresh_token_value))
-    }
-
-    async fn refresh_access_token_with_refresh_token(refresh_token: &str) -> BackupResult<String> {
-        let client_id = crate::config::AppConfig::GOOGLE_CLIENT_ID;
-        let client_secret =
-            crate::config::AppConfig::google_client_secret().unwrap_or_else(|| String::new());
-
-        let client = reqwest::Client::new();
-        let mut params = vec![
-            ("client_id", client_id.to_string()),
-            ("refresh_token", refresh_token.to_string()),
-            ("grant_type", "refresh_token".to_string()),
-        ];
-
-        if !client_secret.is_empty() {
-            params.push(("client_secret", client_secret));
-        }
-
-        let token_response: serde_json::Value = client
-            .post("https://oauth2.googleapis.com/token")
-            .form(&params)
-            .send()
-            .await
-            .into_report()
-            .change_context(BackupError)?
-            .json()
-            .await
-            .into_report()
-            .change_context(BackupError)?;
-
-        token_response["access_token"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                Report::new(BackupError).attach_printable(format!(
-                    "Failed to get access_token from refresh response: {:?}",
-                    token_response
-                ))
-            })
+        Ok(hub)
     }
 
     async fn upload_log_to_drive(
         hub: &DriveHub<HttpsConnector<HttpConnector>>,
         user: &User,
-    ) -> BackupResult<()> {
+    ) -> Result<(), Report<BackupError>> {
         println!("Starting backup to Google Drive...");
 
         let log_path =
@@ -194,7 +133,7 @@ impl BackupCommands {
             .list()
             .q(&format!("name = '{}' and trashed = false", backup_filename))
             .spaces("drive")
-            .add_scope("https://www.googleapis.com/auth/drive")
+            .add_scope("https://www.googleapis.com/auth/drive.file")
             .doit()
             .await
             .into_report()
@@ -214,7 +153,7 @@ impl BackupCommands {
                 println!("Found existing backup file. Updating...");
                 hub.files()
                     .update(file_metadata, file_id)
-                    .add_scope("https://www.googleapis.com/auth/drive")
+                    .add_scope("https://www.googleapis.com/auth/drive.file")
                     .upload(Cursor::new(log_content), mime_type)
                     .await
                     .into_report()
@@ -225,7 +164,7 @@ impl BackupCommands {
                 println!("No existing backup file found. Creating a new one...");
                 hub.files()
                     .create(file_metadata)
-                    .add_scope("https://www.googleapis.com/auth/drive")
+                    .add_scope("https://www.googleapis.com/auth/drive.file")
                     .upload(Cursor::new(log_content), mime_type)
                     .await
                     .into_report()

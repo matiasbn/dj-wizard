@@ -45,8 +45,6 @@ pub struct User {
     pub spotify_access_token: String,
     #[serde(default)]
     pub spotify_refresh_token: String,
-    #[serde(default)]
-    pub google_refresh_token: String,
 }
 
 impl User {
@@ -62,7 +60,6 @@ impl User {
             },
             spotify_access_token: "".to_string(),
             spotify_refresh_token: "".to_string(),
-            google_refresh_token: "".to_string(),
         }
     }
 
@@ -383,24 +380,26 @@ impl SoundeoUser {
             .ok_or(SoundeoUserError)
             .into_report()?
             .to_string();
-        
+
         // Parse downloads using existing method
         let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
-        
-        let main_downloads = remaining_downloads_vec[0].parse::<u32>()
+
+        let main_downloads = remaining_downloads_vec[0]
+            .parse::<u32>()
             .into_report()
             .attach_printable("Failed to parse main downloads as number")
             .change_context(SoundeoUserError)?;
-        
+
         let bonus_downloads = if remaining_downloads_vec.len() == 2 {
-            remaining_downloads_vec[1].parse::<u32>()
+            remaining_downloads_vec[1]
+                .parse::<u32>()
                 .into_report()
                 .attach_printable("Failed to parse bonus downloads as number")
                 .change_context(SoundeoUserError)?
         } else {
             0
         };
-        
+
         Ok((main_downloads, bonus_downloads))
     }
 
@@ -459,7 +458,7 @@ impl SoundeoUser {
         // Examples:
         // Without bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span>
         // With bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus">300</span></span>
-        
+
         // Extract the remaining time from the title attribute
         let time_regex = regex!(r#"title="[^"]*will be reset in ([^")]+)"#);
         let remaining_time = time_regex
@@ -550,7 +549,10 @@ mod test {
             Ok(user) => {
                 println!("User loaded successfully");
                 println!("remaining_downloads: {}", user.remaining_downloads);
-                println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                println!(
+                    "remaining_downloads_bonus: {}",
+                    user.remaining_downloads_bonus
+                );
                 let result = user.get_remamining_downloads_string();
                 println!("Function result: {}", result);
             }
@@ -564,20 +566,20 @@ mod test {
     fn test_check_remaining_downloads() {
         // Test the new check_remaining_downloads method
         println!("=== TESTING CHECK REMAINING DOWNLOADS ===");
-        
+
         match SoundeoUser::new() {
             Ok(mut user) => {
                 println!("User loaded: {}", user.name);
-                
+
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                
+
                 match rt.block_on(user.check_remaining_downloads()) {
                     Ok((main_downloads, bonus_downloads)) => {
                         println!("✅ CHECK SUCCESSFUL!");
                         println!("🔢 Main downloads: {}", main_downloads);
                         println!("🎁 Bonus downloads: {}", bonus_downloads);
                         println!("💯 Total downloads: {}", main_downloads + bonus_downloads);
-                        
+
                         // Basic validations
                         println!("✅ Downloads check completed!");
                     }
@@ -600,33 +602,50 @@ mod test {
     fn test_real_login_and_parse() {
         // Test that actually logs into Soundeo and gets real values
         println!("=== REAL SOUNDEO LOGIN TEST ===");
-        
+
         match SoundeoUser::new() {
             Ok(mut user) => {
                 println!("User loaded: {}", user.name);
-                
+
                 // Use tokio runtime for async login
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                
+
                 match rt.block_on(user.login_and_update_user_info()) {
                     Ok(()) => {
                         println!("✅ LOGIN SUCCESSFUL!");
                         println!("🔢 Remaining downloads: {}", user.remaining_downloads);
                         println!("🎁 Bonus downloads: {}", user.remaining_downloads_bonus);
                         println!("⏰ Reset time: {}", user.remaining_time_to_reset);
-                        println!("📝 Generated string: {}", user.get_remamining_downloads_string());
-                        
+                        println!(
+                            "📝 Generated string: {}",
+                            user.get_remamining_downloads_string()
+                        );
+
                         // Basic validations
-                        assert!(!user.remaining_downloads.is_empty(), "Downloads should not be empty");
-                        assert!(!user.remaining_time_to_reset.is_empty(), "Reset time should not be empty");
-                        
+                        assert!(
+                            !user.remaining_downloads.is_empty(),
+                            "Downloads should not be empty"
+                        );
+                        assert!(
+                            !user.remaining_time_to_reset.is_empty(),
+                            "Reset time should not be empty"
+                        );
+
                         // Verify they are valid numbers
                         let downloads_num: Result<u32, _> = user.remaining_downloads.parse();
                         let bonus_num: Result<u32, _> = user.remaining_downloads_bonus.parse();
-                        
-                        assert!(downloads_num.is_ok(), "Downloads should be a valid number: {}", user.remaining_downloads);
-                        assert!(bonus_num.is_ok(), "Bonus should be a valid number: {}", user.remaining_downloads_bonus);
-                        
+
+                        assert!(
+                            downloads_num.is_ok(),
+                            "Downloads should be a valid number: {}",
+                            user.remaining_downloads
+                        );
+                        assert!(
+                            bonus_num.is_ok(),
+                            "Bonus should be a valid number: {}",
+                            user.remaining_downloads_bonus
+                        );
+
                         println!("✅ All values are valid!");
                     }
                     Err(e) => {
@@ -651,24 +670,32 @@ mod test {
         // HTML real extraído de webpage_test.html
         let real_webpage_html = r#"<ul class="top-menu">
 							<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>		<li id="top-menu-votes"><a href="https://soundeo.com/account/votes"><i class="ico-votes"></i><span id="span-votes"><span class="active" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">30</span> + <span class="" title="Bonus (can be used on any day with premium account)">60</span></span></a></li>		<li id="top-menu-favorites"><a href="https://soundeo.com/account/favorites"><i class="ico-favorites"></i><span id="span-favorites">48</span></a></li>				<li id="top-menu-account"><a href="https://soundeo.com/account"><i class="ico-account"></i><span title="1 day 5 hours 53 minutes 46 seconds">1 day</span></a></li>		<li id="top-menu-logout"><a href="https://soundeo.com/account/logout"><i class="ico-logout"></i></a></li>	</ul>"#;
-        
+
         match SoundeoUser::new() {
             Ok(mut user) => {
                 println!("=== ANÁLISIS DEL SCRAPPER CON PÁGINA REAL ===");
                 println!("HTML real: {}", real_webpage_html);
-                
+
                 // Test del selector actual
                 println!("\n--- Testing selector actual: '#span-downloads span' ---");
-                let downloads_vec = user.get_remaining_downloads(real_webpage_html.to_string()).unwrap();
-                println!("Elementos encontrados por selector downloads: {:?}", downloads_vec);
-                
+                let downloads_vec = user
+                    .get_remaining_downloads(real_webpage_html.to_string())
+                    .unwrap();
+                println!(
+                    "Elementos encontrados por selector downloads: {:?}",
+                    downloads_vec
+                );
+
                 // Test con el HTML completo para parse_remaining_downloads_and_wait_time
                 println!("\n--- Testing parse_remaining_downloads_and_wait_time ---");
                 match user.parse_remaining_downloads_and_wait_time(real_webpage_html.to_string()) {
                     Ok(()) => {
                         println!("✅ Parse exitoso!");
                         println!("remaining_downloads: {}", user.remaining_downloads);
-                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
                         println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
                         let result = user.get_remamining_downloads_string();
                         println!("String generado: {}", result);
@@ -677,7 +704,7 @@ mod test {
                         println!("❌ Parse falló: {:?}", e);
                     }
                 }
-                
+
                 // Test del selector para votes (que SÍ tiene bonus)
                 println!("\n--- Testing selector votes como comparación: '#span-votes span' ---");
                 let document = scraper::Html::parse_document(&real_webpage_html);
@@ -686,7 +713,10 @@ mod test {
                     .select(&votes_selector)
                     .map(|element| element.inner_html().as_str().to_string())
                     .collect();
-                println!("Elementos encontrados por selector votes: {:?}", votes_elements);
+                println!(
+                    "Elementos encontrados por selector votes: {:?}",
+                    votes_elements
+                );
             }
             Err(e) => {
                 println!("Could not load user config: {:?}", e);
@@ -698,13 +728,13 @@ mod test {
     fn test_parse_remaining_downloads_and_wait_time() {
         // HTML real actual de la página de Soundeo (sin bonus)
         let test_html_no_bonus = r#"<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>"#;
-        
+
         // HTML con bonus
         let test_html_with_bonus = r#"<li id="top-menu-downloads"><a href="/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus (can be used on any day with premium account)">300</span></span></a></li>"#;
-        
+
         // Test JSON string format (como viene del server)
         let test_json_string = r#""<li id=\"top-menu-downloads\"><a href=\"/account/downloads\"><i class=\"ico-downloads\"></i><span id=\"span-downloads\"><span class=\"\" title=\"Main (will be reset in 18 hours 54 minutes 50 seconds)\">148</span></span></a></li>""#;
-        
+
         match SoundeoUser::new() {
             Ok(mut user) => {
                 println!("=== Testing WITHOUT bonus ===");
@@ -713,7 +743,10 @@ mod test {
                     Ok(()) => {
                         println!("Parse successful!");
                         println!("remaining_downloads: {}", user.remaining_downloads);
-                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
                         println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
                         let result = user.get_remamining_downloads_string();
                         println!("Generated string: {}", result);
@@ -722,14 +755,18 @@ mod test {
                         println!("Parse failed: {:?}", e);
                     }
                 }
-                
+
                 println!("\n=== Testing WITH bonus ===");
                 println!("HTML: {}", test_html_with_bonus);
-                match user.parse_remaining_downloads_and_wait_time(test_html_with_bonus.to_string()) {
+                match user.parse_remaining_downloads_and_wait_time(test_html_with_bonus.to_string())
+                {
                     Ok(()) => {
                         println!("Parse successful!");
                         println!("remaining_downloads: {}", user.remaining_downloads);
-                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
                         println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
                         let result = user.get_remamining_downloads_string();
                         println!("Generated string: {}", result);
@@ -738,7 +775,7 @@ mod test {
                         println!("Parse failed: {:?}", e);
                     }
                 }
-                
+
                 println!("\n=== Testing JSON string format (como viene del server) ===");
                 println!("JSON string: {}", test_json_string);
                 // Simular el comportamiento correcto con .as_str()
@@ -749,7 +786,10 @@ mod test {
                     Ok(()) => {
                         println!("Parse successful!");
                         println!("remaining_downloads: {}", user.remaining_downloads);
-                        println!("remaining_downloads_bonus: {}", user.remaining_downloads_bonus);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
                         println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
                         let result = user.get_remamining_downloads_string();
                         println!("Generated string: {}", result);
