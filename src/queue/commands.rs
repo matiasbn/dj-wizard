@@ -4,9 +4,9 @@ use inflector::Inflector;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::io::{self, Write};
 use strum::IntoEnumIterator;
 use tokio::sync::{Mutex, Semaphore};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use url::Url;
 
 use crate::artist::{ArtistCRUD, ArtistManager};
@@ -108,13 +108,82 @@ impl ProcessingStats {
     }
 }
 
+struct FixedDisplay {
+    stats_message: Arc<Mutex<String>>,
+    worker_messages: Arc<Mutex<Vec<String>>>,
+}
+
+impl FixedDisplay {
+    fn new() -> Self {
+        Self {
+            stats_message: Arc::new(Mutex::new(String::new())),
+            worker_messages: Arc::new(Mutex::new(vec![String::new(); 4])),
+        }
+    }
+
+    async fn update_stats(&self, message: String) {
+        let mut stats = self.stats_message.lock().await;
+        *stats = message;
+        drop(stats); // Release lock before render
+        self.render().await;
+    }
+
+    async fn update_worker(&self, worker_id: usize, message: String) {
+        let mut workers = self.worker_messages.lock().await;
+        workers[worker_id] = message;
+        drop(workers); // Release lock before render
+        self.render().await;
+    }
+
+    async fn render(&self) {
+        // Clear screen and move cursor to top
+        print!("\x1b[2J\x1b[H");
+        
+        // Print stats line
+        let stats = self.stats_message.lock().await;
+        println!("{}", *stats);
+        
+        // Print worker lines
+        let workers = self.worker_messages.lock().await;
+        for worker_msg in workers.iter() {
+            println!("{}", worker_msg);
+        }
+        
+        // Flush output
+        io::stdout().flush().unwrap();
+    }
+
+    async fn initialize(&self) {
+        // Initialize with default messages
+        let stats = self.stats_message.lock().await;
+        let workers = self.worker_messages.lock().await;
+        
+        // Print stats line
+        println!("{}", if stats.is_empty() { "📊 Initializing..." } else { &stats });
+        
+        // Print worker lines
+        for (i, worker_msg) in workers.iter().enumerate() {
+            println!("{}", if worker_msg.is_empty() { 
+                format!("⏳ Worker {}: Idle", i + 1) 
+            } else { 
+                worker_msg.clone()
+            });
+        }
+    }
+
+    async fn clear(&self) {
+        // Clear the display area
+        print!("\x1b[5A\x1b[J");
+        io::stdout().flush().unwrap();
+    }
+}
+
 struct WorkerState {
     track_queue: Arc<Mutex<VecDeque<QueuedTrack>>>,
     download_counter: Arc<AtomicUsize>,
     stats: Arc<Mutex<ProcessingStats>>,
     soundeo_user: Arc<Mutex<SoundeoUser>>,
-    stats_bar: ProgressBar,
-    worker_bars: Vec<ProgressBar>,
+    display: Arc<FixedDisplay>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, strum_macros::Display, strum_macros::EnumIter)]
@@ -711,7 +780,7 @@ impl QueueCommands {
     ) -> QueueResult<()> {
         loop {
             // Update display: Worker X: Idle
-            state.worker_bars[worker_id].set_message(format!("⏳ Worker {}: Idle", worker_id + 1));
+            state.display.update_worker(worker_id, format!("⏳ Worker {}: Idle", worker_id + 1)).await;
             
             // Take next track from queue
             let track = {
@@ -721,7 +790,9 @@ impl QueueCommands {
             
             let track = match track {
                 Some(t) => t,
-                None => break, // No more tracks
+                None => {
+                    break; // No more tracks
+                }
             };
             
             // Check downloads before processing
@@ -739,7 +810,7 @@ impl QueueCommands {
                 if real_downloads == 0 {
                     // Put track back and finish
                     state.track_queue.lock().await.push_front(track);
-                    state.worker_bars[worker_id].set_message(format!("⏸️  Worker {}: No downloads left", worker_id + 1));
+                    state.display.update_worker(worker_id, format!("⏸️  Worker {}: No downloads left", worker_id + 1)).await;
                     break;
                 }
                 state.download_counter.store(real_downloads as usize, Ordering::SeqCst);
@@ -747,7 +818,7 @@ impl QueueCommands {
             
             // Process track
             let track_title = format!("'{}'", &track.track_id[..std::cmp::min(20, track.track_id.len())]);
-            state.worker_bars[worker_id].set_message(format!("🔄 Worker {}: Processing {}", worker_id + 1, track_title));
+            state.display.update_worker(worker_id, format!("🔄 Worker {}: Processing {}", worker_id + 1, track_title)).await;
             
             let result = QueueCommands::process_single_track_for_queue(
                 track,
@@ -765,32 +836,32 @@ impl QueueCommands {
                     TrackQueueResult::Downloaded { .. } => {
                         state.download_counter.fetch_sub(1, Ordering::SeqCst);
                         stats.downloaded += 1;
-                        state.worker_bars[worker_id].set_message(format!("✅ Worker {}: Completed", worker_id + 1));
+                        state.display.update_worker(worker_id, format!("✅ Worker {}: Completed", worker_id + 1)).await;
                     }
                     TrackQueueResult::NotDownloadable { .. } => {
                         stats.not_downloadable += 1;
-                        state.worker_bars[worker_id].set_message(format!("🚫 Worker {}: Not downloadable", worker_id + 1));
+                        state.display.update_worker(worker_id, format!("🚫 Worker {}: Not downloadable", worker_id + 1)).await;
                     }
                     TrackQueueResult::StemTrack { .. } => {
                         stats.stem_tracks += 1;
-                        state.worker_bars[worker_id].set_message(format!("🎛️  Worker {}: STEM track", worker_id + 1));
+                        state.display.update_worker(worker_id, format!("🎛️  Worker {}: STEM track", worker_id + 1)).await;
                     }
                     TrackQueueResult::Failed { .. } => {
                         stats.failed += 1;
-                        state.worker_bars[worker_id].set_message(format!("❌ Worker {}: Failed", worker_id + 1));
+                        state.display.update_worker(worker_id, format!("❌ Worker {}: Failed", worker_id + 1)).await;
                     }
                 }
                 
                 // Update stats display
                 let downloads_left = state.download_counter.load(Ordering::SeqCst);
-                state.stats_bar.set_message(stats.get_remaining_downloads(downloads_left));
+                state.display.update_stats(stats.get_remaining_downloads(downloads_left)).await;
             }
             
             // Apply log changes
             Self::apply_queue_batch_results(vec![result]).await?;
         }
         
-        state.worker_bars[worker_id].set_message(format!("✅ Worker {}: Finished", worker_id + 1));
+        state.display.update_worker(worker_id, format!("✅ Worker {}: Finished", worker_id + 1)).await;
         Ok(())
     }
 
@@ -842,30 +913,9 @@ impl QueueCommands {
             format!("{}", total_tracks).cyan()
         );
 
-        // Setup MultiProgress for fixed display
-        let multi_progress = MultiProgress::new();
-        
-        // Stats bar (line 1) - hidden progress, just for message display
-        let stats_bar = multi_progress.add(ProgressBar::hidden());
-        stats_bar.set_style(
-            ProgressStyle::with_template("{msg}")
-                .unwrap()
-        );
-        stats_bar.enable_steady_tick(std::time::Duration::from_millis(100));
-        
-        // Worker bars (lines 2-5) - hidden progress, just for message display
-        let worker_bars: Vec<ProgressBar> = (0..4)
-            .map(|i| {
-                let bar = multi_progress.add(ProgressBar::hidden());
-                bar.set_style(
-                    ProgressStyle::with_template("{msg}")
-                        .unwrap()
-                );
-                bar.set_message(format!("⏳ Worker {}: Idle", i + 1));
-                bar.enable_steady_tick(std::time::Duration::from_millis(100));
-                bar
-            })
-            .collect();
+        // Setup fixed display
+        let display = Arc::new(FixedDisplay::new());
+        display.initialize().await;
 
         // Initialize shared state
         let track_queue = Arc::new(Mutex::new(VecDeque::from(queued_tracks)));
@@ -878,36 +928,35 @@ impl QueueCommands {
             download_counter,
             stats: stats.clone(),
             soundeo_user: soundeo_user_shared.clone(),
-            stats_bar: stats_bar.clone(),
-            worker_bars,
+            display: display.clone(),
         });
 
         // Initialize stats display
         {
             let stats_guard = stats.lock().await;
-            stats_bar.set_message(stats_guard.get_remaining_downloads(initial_downloads as usize));
+            display.update_stats(stats_guard.get_remaining_downloads(initial_downloads as usize)).await;
         }
 
         // Spawn 4 workers
         let mut worker_handles = Vec::new();
         for worker_id in 0..4 {
             let state_clone = state.clone();
+            println!("Spawning worker {}", worker_id + 1); // Debug
             let handle = tokio::spawn(async move {
+                println!("Worker {} started", worker_id + 1); // Debug
                 Self::worker_loop(worker_id, state_clone).await
             });
             worker_handles.push(handle);
         }
+        
 
         // Wait for all workers to complete
         for handle in worker_handles {
             handle.await.unwrap()?;
         }
 
-        // Clear progress bars cleanly
-        for bar in &state.worker_bars {
-            bar.finish_and_clear();
-        }
-        state.stats_bar.finish_and_clear();
+        // Clear the fixed display
+        display.clear().await;
         
         // Print final summary
         let final_stats = stats.lock().await;
