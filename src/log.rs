@@ -430,6 +430,23 @@ impl SoundeoCRUD for DjWizardLog {
         log.save_log()?;
         Ok(())
     }
+
+    fn mark_track_as_not_downloadable(soundeo_track_id: String) -> DjWizardLogResult<()> {
+        let mut log = Self::read_log()?;
+        log.last_update = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .into_report()
+            .change_context(DjWizardLogError)?
+            .as_secs();
+        log.soundeo
+            .tracks_info
+            .get_mut(&soundeo_track_id)
+            .ok_or(DjWizardLogError)
+            .into_report()?
+            .downloadable = false;
+        log.save_log()?;
+        Ok(())
+    }
 }
 
 impl SpotifyCRUD for DjWizardLog {

@@ -6,6 +6,7 @@ use error_stack::ResultExt;
 use crate::log::{DjWizardLog, Priority};
 use crate::queue::{QueueError, QueueResult};
 use crate::soundeo::track::SoundeoTrack;
+use crate::soundeo::SoundeoCRUD;
 use crate::user::SoundeoUser;
 
 pub struct TrackProcessor;
@@ -23,7 +24,7 @@ impl TrackProcessor {
         let available_tracks = DjWizardLog::get_available_tracks().change_context(QueueError)?;
         let queued_tracks = DjWizardLog::get_queued_tracks().change_context(QueueError)?;
         let queued_ids: HashSet<String> = queued_tracks.iter().map(|t| t.track_id.clone()).collect();
-        let soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
+        let _soundeo_info = DjWizardLog::get_soundeo().change_context(QueueError)?;
 
         let total_tracks = track_ids.len();
         let mut total_added = 0;
@@ -81,6 +82,13 @@ impl TrackProcessor {
                 .await
                 .change_context(QueueError)?;
 
+            // Check if track is downloadable before adding to queue
+            if !track_info.downloadable {
+                track_info.print_not_downloadable();
+                total_skipped += 1;
+                continue;
+            }
+
             // Check if already downloaded
             if track_info.already_downloaded {
                 if !repeat_download {
@@ -91,6 +99,34 @@ impl TrackProcessor {
                     track_info.print_downloading_again();
                     // Note: We don't reset already_downloaded here as it's expensive
                     // The reset will happen during actual download
+                }
+            }
+
+            // Check if track is STEM before adding to queue
+            match track_info.is_stem(soundeo_user).await {
+                Ok(true) => {
+                    println!(
+                        "Track {} ({}) is a STEM file (not supported), skipping: {}",
+                        track_info.title.red(),
+                        track_id.clone().yellow(),
+                        track_info.get_track_url().yellow()
+                    );
+                    DjWizardLog::mark_track_as_not_downloadable(track_id.clone())
+                        .change_context(QueueError)?;
+                    total_skipped += 1;
+                    continue;
+                }
+                Ok(false) => {
+                    // Track is not STEM, continue with adding to queue
+                }
+                Err(e) => {
+                    println!(
+                        "Failed to check if track {} is STEM: {:?}, skipping",
+                        track_info.title.yellow(),
+                        e
+                    );
+                    total_skipped += 1;
+                    continue;
                 }
             }
 
