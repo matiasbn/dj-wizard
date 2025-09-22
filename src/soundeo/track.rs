@@ -160,7 +160,7 @@ impl SoundeoTrack {
             .check_remaining_downloads()
             .await
             .change_context(SoundeoError)?;
-        
+
         if main_downloads + bonus_downloads == 0 {
             println!(
                 "{}",
@@ -301,6 +301,61 @@ mod tests {
             .await
             .unwrap();
         println!("{:#?}", soundeo_full_info);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_track_full_info() {
+        // Test to see exactly what data comes from Soundeo API
+        println!("=== TESTING SOUNDEO API RESPONSE ===");
+
+        // Hardcoded track ID for testing (using ID from test_get_info)
+        let test_track_id = "20406861";
+
+        match SoundeoUser::new() {
+            Ok(mut soundeo_user) => {
+                println!("User loaded: {}", soundeo_user.name);
+
+                // Login first to initialize session
+                soundeo_user.login_and_update_user_info().await.unwrap();
+
+                // Copy exact lines 74-86 from get_info method
+                let api_response = SoundeoAPI::GetTrackInfo {
+                    track_id: test_track_id.to_string(),
+                }
+                .get(&soundeo_user)
+                .await
+                .change_context(SoundeoError)
+                .unwrap();
+
+                let json: Value = serde_json::from_str(&api_response)
+                    .into_report()
+                    .change_context(SoundeoError)
+                    .unwrap();
+
+                println!("json {}", json);
+
+                let track = json["track"].clone();
+
+                // Print what we get from Soundeo
+                println!("🔍 RAW API RESPONSE:");
+                println!("{:#?}", api_response);
+                println!("\n🔍 PARSED JSON:");
+                println!("{:#?}", json);
+                println!("\n🔍 TRACK DATA:");
+                println!("{:#?}", track);
+
+                let full_info: SoundeoTrack = serde_json::from_value(track)
+                    .into_report()
+                    .change_context(SoundeoError)
+                    .unwrap();
+
+                println!("\n🔍 FULL INFO STRUCT:");
+                println!("{:#?}", full_info);
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+            }
+        }
     }
 
     #[tokio::test]
