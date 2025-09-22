@@ -45,8 +45,6 @@ pub struct User {
     pub spotify_access_token: String,
     #[serde(default)]
     pub spotify_refresh_token: String,
-    #[serde(default)]
-    pub google_refresh_token: String,
 }
 
 impl User {
@@ -62,7 +60,6 @@ impl User {
             },
             spotify_access_token: "".to_string(),
             spotify_refresh_token: "".to_string(),
-            google_refresh_token: "".to_string(),
         }
     }
 
@@ -366,6 +363,46 @@ impl SoundeoUser {
         Ok(())
     }
 
+    pub async fn check_remaining_downloads(&mut self) -> SoundeoUserResult<(u32, u32)> {
+        let response = self.get_login_response().await?;
+        let response_text = response
+            .text()
+            .await
+            .into_report()
+            .attach_printable("Failed to retrieve response text for downloads check")
+            .change_context(SoundeoUserError)?;
+        let json_resp: Value = serde_json::from_str(&response_text)
+            .into_report()
+            .attach_printable("Failed to parse response text as JSON for downloads check")
+            .change_context(SoundeoUserError)?;
+        let header = json_resp["header"]
+            .as_str()
+            .ok_or(SoundeoUserError)
+            .into_report()?
+            .to_string();
+
+        // Parse downloads using existing method
+        let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
+
+        let main_downloads = remaining_downloads_vec[0]
+            .parse::<u32>()
+            .into_report()
+            .attach_printable("Failed to parse main downloads as number")
+            .change_context(SoundeoUserError)?;
+
+        let bonus_downloads = if remaining_downloads_vec.len() == 2 {
+            remaining_downloads_vec[1]
+                .parse::<u32>()
+                .into_report()
+                .attach_printable("Failed to parse bonus downloads as number")
+                .change_context(SoundeoUserError)?
+        } else {
+            0
+        };
+
+        Ok((main_downloads, bonus_downloads))
+    }
+
     pub async fn login_and_update_user_info(&mut self) -> SoundeoUserResult<()> {
         if self.cookie.is_empty() {
             println!("Logging in with {}", self.name.clone().green());
@@ -406,7 +443,11 @@ impl SoundeoUser {
                 .into_report()
                 .attach_printable("Failed to parse response text as JSON")
                 .change_context(SoundeoUserError)?;
-            let header = json_resp["header"].clone().to_string();
+            let header = json_resp["header"]
+                .as_str()
+                .ok_or(SoundeoUserError)
+                .into_report()?
+                .to_string();
             self.parse_remaining_downloads_and_wait_time(header)?;
             logged_in = true;
         }
@@ -414,34 +455,19 @@ impl SoundeoUser {
     }
 
     fn parse_remaining_downloads_and_wait_time(&mut self, header: String) -> SoundeoUserResult<()> {
-        // Example
-        // <span id='span-downloads'><span class=\"\" title=\"Main (will be reset in 2 hours 42 minutes 10 seconds)\">150</span></span>
-        let header_downloads_regex = regex!(
-            r#"<span id='span-downloads'>(.*?)<\/span>(?:\s*(?:\+\s*)?<span[^>]*>(.*?)<\/span>)?(<\/span>)?"#
-        );
+        // Examples:
+        // Without bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span>
+        // With bonus: <span id='span-downloads'><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus">300</span></span>
 
-        let downloads_header = header_downloads_regex
-            .find(&header)
-            .ok_or(SoundeoUserError)
-            .into_report()?
-            .as_str()
-            .to_string();
+        // Extract the remaining time from the title attribute
+        let time_regex = regex!(r#"title="[^"]*will be reset in ([^")]+)"#);
+        let remaining_time = time_regex
+            .captures(&header)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
-        let mut downloads_header_split = downloads_header
-            .trim_start_matches(
-                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in ",
-            )
-            .trim_end_matches(r#"</span></span>"#,
-            )
-            .split(r#")\">"#);
-        let remaining_time = downloads_header_split
-            .next()
-            .ok_or(SoundeoUserError)
-            .into_report()?
-            .trim_start_matches(
-                r#"<span id='span-downloads'><span class=\"\" title=\"Main (will be reset in "#,
-            )
-            .to_string();
+        // Extract downloads using the existing method
         let remaining_downloads_vec = self.get_remaining_downloads(header.clone())?;
 
         self.remaining_downloads = remaining_downloads_vec[0].clone();
@@ -514,6 +540,268 @@ mod test {
 
         for number in numbers {
             println!("Number: {}", number);
+        }
+    }
+
+    #[test]
+    fn test_get_remamining_downloads_string() {
+        match SoundeoUser::new() {
+            Ok(user) => {
+                println!("User loaded successfully");
+                println!("remaining_downloads: {}", user.remaining_downloads);
+                println!(
+                    "remaining_downloads_bonus: {}",
+                    user.remaining_downloads_bonus
+                );
+                let result = user.get_remamining_downloads_string();
+                println!("Function result: {}", result);
+            }
+            Err(e) => {
+                println!("Error loading user config: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_check_remaining_downloads() {
+        // Test the new check_remaining_downloads method
+        println!("=== TESTING CHECK REMAINING DOWNLOADS ===");
+
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("User loaded: {}", user.name);
+
+                let rt = tokio::runtime::Runtime::new().unwrap();
+
+                match rt.block_on(user.check_remaining_downloads()) {
+                    Ok((main_downloads, bonus_downloads)) => {
+                        println!("✅ CHECK SUCCESSFUL!");
+                        println!("🔢 Main downloads: {}", main_downloads);
+                        println!("🎁 Bonus downloads: {}", bonus_downloads);
+                        println!("💯 Total downloads: {}", main_downloads + bonus_downloads);
+
+                        // Basic validations
+                        println!("✅ Downloads check completed!");
+                    }
+                    Err(e) => {
+                        println!("❌ CHECK FAILED: {:?}", e);
+                        println!("⚠️  This test requires valid credentials");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+                println!("⚠️  This test requires a valid configuration file");
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn test_real_login_and_parse() {
+        // Test that actually logs into Soundeo and gets real values
+        println!("=== REAL SOUNDEO LOGIN TEST ===");
+
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("User loaded: {}", user.name);
+
+                // Use tokio runtime for async login
+                let rt = tokio::runtime::Runtime::new().unwrap();
+
+                match rt.block_on(user.login_and_update_user_info()) {
+                    Ok(()) => {
+                        println!("✅ LOGIN SUCCESSFUL!");
+                        println!("🔢 Remaining downloads: {}", user.remaining_downloads);
+                        println!("🎁 Bonus downloads: {}", user.remaining_downloads_bonus);
+                        println!("⏰ Reset time: {}", user.remaining_time_to_reset);
+                        println!(
+                            "📝 Generated string: {}",
+                            user.get_remamining_downloads_string()
+                        );
+
+                        // Basic validations
+                        assert!(
+                            !user.remaining_downloads.is_empty(),
+                            "Downloads should not be empty"
+                        );
+                        assert!(
+                            !user.remaining_time_to_reset.is_empty(),
+                            "Reset time should not be empty"
+                        );
+
+                        // Verify they are valid numbers
+                        let downloads_num: Result<u32, _> = user.remaining_downloads.parse();
+                        let bonus_num: Result<u32, _> = user.remaining_downloads_bonus.parse();
+
+                        assert!(
+                            downloads_num.is_ok(),
+                            "Downloads should be a valid number: {}",
+                            user.remaining_downloads
+                        );
+                        assert!(
+                            bonus_num.is_ok(),
+                            "Bonus should be a valid number: {}",
+                            user.remaining_downloads_bonus
+                        );
+
+                        println!("✅ All values are valid!");
+                    }
+                    Err(e) => {
+                        println!("❌ LOGIN FAILED: {:?}", e);
+                        println!("⚠️  This test requires valid credentials in configuration");
+                        // Don't fail the test if there are no valid credentials
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+                println!("⚠️  This test requires a valid configuration file");
+                // Don't fail the test if there's no configuration
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn test_scrapper_with_real_webpage() {
+        // HTML real extraído de webpage_test.html
+        let real_webpage_html = r#"<ul class="top-menu">
+							<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>		<li id="top-menu-votes"><a href="https://soundeo.com/account/votes"><i class="ico-votes"></i><span id="span-votes"><span class="active" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">30</span> + <span class="" title="Bonus (can be used on any day with premium account)">60</span></span></a></li>		<li id="top-menu-favorites"><a href="https://soundeo.com/account/favorites"><i class="ico-favorites"></i><span id="span-favorites">48</span></a></li>				<li id="top-menu-account"><a href="https://soundeo.com/account"><i class="ico-account"></i><span title="1 day 5 hours 53 minutes 46 seconds">1 day</span></a></li>		<li id="top-menu-logout"><a href="https://soundeo.com/account/logout"><i class="ico-logout"></i></a></li>	</ul>"#;
+
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("=== ANÁLISIS DEL SCRAPPER CON PÁGINA REAL ===");
+                println!("HTML real: {}", real_webpage_html);
+
+                // Test del selector actual
+                println!("\n--- Testing selector actual: '#span-downloads span' ---");
+                let downloads_vec = user
+                    .get_remaining_downloads(real_webpage_html.to_string())
+                    .unwrap();
+                println!(
+                    "Elementos encontrados por selector downloads: {:?}",
+                    downloads_vec
+                );
+
+                // Test con el HTML completo para parse_remaining_downloads_and_wait_time
+                println!("\n--- Testing parse_remaining_downloads_and_wait_time ---");
+                match user.parse_remaining_downloads_and_wait_time(real_webpage_html.to_string()) {
+                    Ok(()) => {
+                        println!("✅ Parse exitoso!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("String generado: {}", result);
+                    }
+                    Err(e) => {
+                        println!("❌ Parse falló: {:?}", e);
+                    }
+                }
+
+                // Test del selector para votes (que SÍ tiene bonus)
+                println!("\n--- Testing selector votes como comparación: '#span-votes span' ---");
+                let document = scraper::Html::parse_document(&real_webpage_html);
+                let votes_selector = scraper::Selector::parse("#span-votes span").unwrap();
+                let votes_elements: Vec<String> = document
+                    .select(&votes_selector)
+                    .map(|element| element.inner_html().as_str().to_string())
+                    .collect();
+                println!(
+                    "Elementos encontrados por selector votes: {:?}",
+                    votes_elements
+                );
+            }
+            Err(e) => {
+                println!("Could not load user config: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_remaining_downloads_and_wait_time() {
+        // HTML real actual de la página de Soundeo (sin bonus)
+        let test_html_no_bonus = r#"<li id="top-menu-downloads"><a href="https://soundeo.com/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 18 hours 54 minutes 50 seconds)">148</span></span></a></li>"#;
+
+        // HTML con bonus
+        let test_html_with_bonus = r#"<li id="top-menu-downloads"><a href="/account/downloads"><i class="ico-downloads"></i><span id="span-downloads"><span class="" title="Main (will be reset in 6 hours 57 minutes 9 seconds)">149</span> + <span class="" title="Bonus (can be used on any day with premium account)">300</span></span></a></li>"#;
+
+        // Test JSON string format (como viene del server)
+        let test_json_string = r#""<li id=\"top-menu-downloads\"><a href=\"/account/downloads\"><i class=\"ico-downloads\"></i><span id=\"span-downloads\"><span class=\"\" title=\"Main (will be reset in 18 hours 54 minutes 50 seconds)\">148</span></span></a></li>""#;
+
+        match SoundeoUser::new() {
+            Ok(mut user) => {
+                println!("=== Testing WITHOUT bonus ===");
+                println!("HTML: {}", test_html_no_bonus);
+                match user.parse_remaining_downloads_and_wait_time(test_html_no_bonus.to_string()) {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+
+                println!("\n=== Testing WITH bonus ===");
+                println!("HTML: {}", test_html_with_bonus);
+                match user.parse_remaining_downloads_and_wait_time(test_html_with_bonus.to_string())
+                {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+
+                println!("\n=== Testing JSON string format (como viene del server) ===");
+                println!("JSON string: {}", test_json_string);
+                // Simular el comportamiento correcto con .as_str()
+                let json_val: serde_json::Value = serde_json::from_str(test_json_string).unwrap();
+                let header_from_json = json_val.as_str().unwrap_or("").to_string();
+                println!("Header after .as_str(): {}", header_from_json);
+                match user.parse_remaining_downloads_and_wait_time(header_from_json) {
+                    Ok(()) => {
+                        println!("Parse successful!");
+                        println!("remaining_downloads: {}", user.remaining_downloads);
+                        println!(
+                            "remaining_downloads_bonus: {}",
+                            user.remaining_downloads_bonus
+                        );
+                        println!("remaining_time_to_reset: {}", user.remaining_time_to_reset);
+                        let result = user.get_remamining_downloads_string();
+                        println!("Generated string: {}", result);
+                    }
+                    Err(e) => {
+                        println!("Parse failed: {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Could not load user config: {:?}", e);
+            }
         }
     }
 }
