@@ -122,39 +122,39 @@ impl FixedDisplay {
     }
 
     async fn update_stats(&self, message: String) {
-        let mut stats = self.stats_message.lock().await;
-        *stats = message;
-        drop(stats); // Release lock before render
-        self.render().await;
+        {
+            let mut stats = self.stats_message.lock().await;
+            *stats = message.clone();
+        } // Release lock before render
+        
+        // Update stats line (move up 5 lines to stats line)
+        print!("\x1B[5A"); // Move up to stats line
+        print!("\x1B[2K\r{}", message); // Clear line and print stats
+        print!("\x1B[5B"); // Move back down to bottom
+        io::stdout().flush().unwrap();
     }
 
     async fn update_worker(&self, worker_id: usize, message: String) {
         let mut workers = self.worker_messages.lock().await;
         workers[worker_id] = message;
+        let worker_message = workers[worker_id].clone();
         drop(workers); // Release lock before render
-        self.render().await;
-    }
-
-    async fn render(&self) {
-        // Clear screen and move cursor to top
-        print!("\x1b[2J\x1b[H");
         
-        // Print stats line
-        let stats = self.stats_message.lock().await;
-        println!("{}", *stats);
-        
-        // Print worker lines
-        let workers = self.worker_messages.lock().await;
-        for worker_msg in workers.iter() {
-            println!("{}", worker_msg);
-        }
-        
-        // Flush output
+        // Update specific worker line
+        // Move up: 4 lines for workers below this one + 1 to get to this worker's line
+        let lines_up = 4 - worker_id;
+        print!("\x1B[{}A", lines_up); // Move up to worker line
+        print!("\x1B[2K\r{}", worker_message); // Clear line and print worker status
+        print!("\x1B[{}B", lines_up); // Move back down to bottom
         io::stdout().flush().unwrap();
     }
 
+    async fn render(&self) {
+        // This method is no longer used - updates are done individually
+    }
+
     async fn initialize(&self) {
-        // Initialize with default messages
+        // Initialize with default messages and print all 5 lines once
         let stats = self.stats_message.lock().await;
         let workers = self.worker_messages.lock().await;
         
@@ -169,6 +169,9 @@ impl FixedDisplay {
                 worker_msg.clone()
             });
         }
+        
+        // Now cursor is at the bottom, all future updates will use relative positioning
+        io::stdout().flush().unwrap();
     }
 
     async fn clear(&self) {
@@ -691,14 +694,7 @@ impl QueueCommands {
         
         // Check if track is downloadable, if not, remove from queue
         if !track_info.downloadable {
-            println!(
-                "{}/{}: Track {} ({}) is not downloadable, removing from queue",
-                track_index + 1,
-                total_tracks,
-                track_info.title.red(),
-                track_info.get_track_url().yellow()
-            );
-            track_info.print_not_downloadable();
+            // Track not downloadable - info shown in worker display
             let title = track_info.title.clone();
             let track_url = track_info.get_track_url();
             return Ok(TrackQueueResult::NotDownloadable {
@@ -716,12 +712,7 @@ impl QueueCommands {
         
         match download_url_result {
             Ok(_) => {
-                println!(
-                    "{}/{}: Track {} added to the available tracks",
-                    track_index + 1,
-                    total_tracks,
-                    track_info.title.green()
-                );
+                // Track downloaded successfully - info shown in worker display
                 Ok(TrackQueueResult::Downloaded {
                     track_id: queued_track.track_id,
                     title: track_info.title,
@@ -736,14 +727,7 @@ impl QueueCommands {
                 
                 match stem_check_result {
                     Ok(true) => {
-                        // Track is STEM - print specific message, mark as not downloadable, and remove from queue
-                        println!(
-                            "{}/{}: Track {} ({}) is a STEM file (not supported), removing from queue",
-                            track_index + 1,
-                            total_tracks,
-                            track_info.title.red(),
-                            track_info.get_track_url().yellow()
-                        );
+                        // Track is STEM - info shown in worker display
                         let title = track_info.title.clone();
                         let track_url = track_info.get_track_url();
                         Ok(TrackQueueResult::StemTrack {
@@ -753,14 +737,7 @@ impl QueueCommands {
                         })
                     }
                     Ok(false) | Err(_) => {
-                        // Track is not STEM or failed to check - show generic error (keep in queue)
-                        println!(
-                            "{}/{}: Track {} ({}) can't be downloaded now",
-                            track_index + 1,
-                            total_tracks,
-                            track_info.title.yellow(),
-                            track_info.get_track_url().yellow()
-                        );
+                        // Track failed - info shown in worker display
                         let title = track_info.title.clone();
                         let track_url = track_info.get_track_url();
                         Ok(TrackQueueResult::Failed {
@@ -941,9 +918,7 @@ impl QueueCommands {
         let mut worker_handles = Vec::new();
         for worker_id in 0..4 {
             let state_clone = state.clone();
-            println!("Spawning worker {}", worker_id + 1); // Debug
             let handle = tokio::spawn(async move {
-                println!("Worker {} started", worker_id + 1); // Debug
                 Self::worker_loop(worker_id, state_clone).await
             });
             worker_handles.push(handle);
