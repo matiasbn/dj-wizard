@@ -44,6 +44,25 @@ pub struct SoundeoTrack {
     pub already_downloaded: bool,
 }
 
+/// Detects if a track is a STEM track based on the raw JSON API response
+/// A track is STEM if it has only 1 format and that format is STEM
+pub fn detect_stem(api_response: &str) -> SoundeoResult<bool> {
+    let json: Value = serde_json::from_str(api_response)
+        .into_report()
+        .change_context(SoundeoError)?;
+    
+    let track = &json["track"];
+    
+    // Check if format1str is "STEM" AND format2 is null (only 1 format)
+    if let Some(format1str) = track["format1str"].as_str() {
+        if format1str == "STEM" && track["format2"].is_null() {
+            return Ok(true);
+        }
+    }
+    
+    Ok(false)
+}
+
 impl SoundeoTrack {
     pub fn new(id: String) -> Self {
         SoundeoTrack {
@@ -127,10 +146,29 @@ impl SoundeoTrack {
                 Ok(download_url)
             }
             Some(flash_object) => {
-                // No more downloads available
+                // Download failed - check if it's because the track is STEM
                 let flash = flash_object.as_object().ok_or(SoundeoError).into_report()?;
                 let message = flash.get("message").unwrap().to_string();
-                return Err(Report::new(SoundeoError).attach(Suggestion(message)));
+                
+                // Check if track is STEM before returning error
+                match self.is_stem(soundeo_user).await {
+                    Ok(true) => {
+                        // Track is STEM - return specific error
+                        return Err(Report::new(SoundeoError).attach(Suggestion(format!(
+                            "Track is a STEM file (not supported): {} - {}",
+                            self.title,
+                            self.get_track_url()
+                        ))));
+                    }
+                    Ok(false) => {
+                        // Track is not STEM - return original error
+                        return Err(Report::new(SoundeoError).attach(Suggestion(message)));
+                    }
+                    Err(_) => {
+                        // Failed to check STEM status - return original error
+                        return Err(Report::new(SoundeoError).attach(Suggestion(message)));
+                    }
+                }
             }
         }
     }
@@ -283,6 +321,26 @@ impl SoundeoTrack {
     fn get_file_name(&self) -> String {
         format!("{}.AIFF", self.title)
     }
+
+    /// Check if this track is a STEM track by getting its info from the API
+    pub async fn is_stem(&self, soundeo_user: &SoundeoUser) -> SoundeoResult<bool> {
+        let api_response = SoundeoAPI::GetTrackInfo {
+            track_id: self.id.clone(),
+        }
+        .get(soundeo_user)
+        .await
+        .change_context(SoundeoError)?;
+        
+        detect_stem(&api_response)
+    }
+
+    pub fn print_not_downloadable_stem(&self) {
+        println!(
+            "Track is a STEM file (not supported): {}, {}",
+            self.title.clone().yellow(),
+            self.get_track_url().yellow()
+        );
+    }
     // fn parse_json_response(response: String) -> Sounde
 }
 
@@ -308,8 +366,9 @@ mod tests {
         // Test to see exactly what data comes from Soundeo API
         println!("=== TESTING SOUNDEO API RESPONSE ===");
 
-        // Hardcoded track ID for testing (using ID from test_get_info)
-        let test_track_id = "20406861";
+        // Hardcoded track IDs for testing
+        let test_track_id_stem = "7870832";
+        let test_track_id_not_stem = "20406861";
 
         match SoundeoUser::new() {
             Ok(mut soundeo_user) => {
@@ -318,39 +377,56 @@ mod tests {
                 // Login first to initialize session
                 soundeo_user.login_and_update_user_info().await.unwrap();
 
-                // Copy exact lines 74-86 from get_info method
-                let api_response = SoundeoAPI::GetTrackInfo {
-                    track_id: test_track_id.to_string(),
+                // Test STEM track
+                println!("\n🟡 === TESTING STEM TRACK (ID: {}) ===", test_track_id_stem);
+                let api_response_stem = SoundeoAPI::GetTrackInfo {
+                    track_id: test_track_id_stem.to_string(),
                 }
                 .get(&soundeo_user)
                 .await
                 .change_context(SoundeoError)
                 .unwrap();
 
-                let json: Value = serde_json::from_str(&api_response)
+                let json_stem: Value = serde_json::from_str(&api_response_stem)
                     .into_report()
                     .change_context(SoundeoError)
                     .unwrap();
 
-                println!("json {}", json);
+                let track_stem = json_stem["track"].clone();
 
-                let track = json["track"].clone();
+                println!("🔍 STEM TRACK DATA:");
+                println!("{:#?}", track_stem);
 
-                // Print what we get from Soundeo
-                println!("🔍 RAW API RESPONSE:");
-                println!("{:#?}", api_response);
-                println!("\n🔍 PARSED JSON:");
-                println!("{:#?}", json);
-                println!("\n🔍 TRACK DATA:");
-                println!("{:#?}", track);
+                // Test normal track
+                println!("\n🟢 === TESTING NORMAL TRACK (ID: {}) ===", test_track_id_not_stem);
+                let api_response_normal = SoundeoAPI::GetTrackInfo {
+                    track_id: test_track_id_not_stem.to_string(),
+                }
+                .get(&soundeo_user)
+                .await
+                .change_context(SoundeoError)
+                .unwrap();
 
-                let full_info: SoundeoTrack = serde_json::from_value(track)
+                let json_normal: Value = serde_json::from_str(&api_response_normal)
                     .into_report()
                     .change_context(SoundeoError)
                     .unwrap();
 
-                println!("\n🔍 FULL INFO STRUCT:");
-                println!("{:#?}", full_info);
+                let track_normal = json_normal["track"].clone();
+
+                println!("🔍 NORMAL TRACK DATA:");
+                println!("{:#?}", track_normal);
+
+                // Compare key fields
+                println!("\n🔍 === COMPARISON ===");
+                println!("STEM format1str: {:?}", track_stem["format1str"]);
+                println!("NORMAL format1str: {:?}", track_normal["format1str"]);
+                println!("STEM format1: {:?}", track_stem["format1"]);
+                println!("NORMAL format1: {:?}", track_normal["format1"]);
+                println!("STEM format2: {:?}", track_stem["format2"]);
+                println!("NORMAL format2: {:?}", track_normal["format2"]);
+                println!("STEM format2str: {:?}", track_stem["format2str"]);
+                println!("NORMAL format2str: {:?}", track_normal["format2str"]);
             }
             Err(e) => {
                 println!("❌ Error loading user configuration: {:?}", e);
@@ -369,5 +445,52 @@ mod tests {
             .await
             .unwrap();
         println!("{:#?}", track);
+    }
+
+    #[tokio::test]
+    async fn test_detect_stem() {
+        // Test STEM detection function
+        println!("=== TESTING STEM DETECTION ===");
+
+        let test_track_id_stem = "7870832";
+        let test_track_id_not_stem = "20406861";
+
+        match SoundeoUser::new() {
+            Ok(mut soundeo_user) => {
+                println!("User loaded: {}", soundeo_user.name);
+                soundeo_user.login_and_update_user_info().await.unwrap();
+
+                // Test STEM track detection
+                let api_response_stem = SoundeoAPI::GetTrackInfo {
+                    track_id: test_track_id_stem.to_string(),
+                }
+                .get(&soundeo_user)
+                .await
+                .change_context(SoundeoError)
+                .unwrap();
+
+                let is_stem_result = detect_stem(&api_response_stem).unwrap();
+                println!("🟡 Track {} is STEM: {}", test_track_id_stem, is_stem_result);
+                assert!(is_stem_result, "Track {} should be detected as STEM", test_track_id_stem);
+
+                // Test normal track detection
+                let api_response_normal = SoundeoAPI::GetTrackInfo {
+                    track_id: test_track_id_not_stem.to_string(),
+                }
+                .get(&soundeo_user)
+                .await
+                .change_context(SoundeoError)
+                .unwrap();
+
+                let is_not_stem_result = detect_stem(&api_response_normal).unwrap();
+                println!("🟢 Track {} is STEM: {}", test_track_id_not_stem, is_not_stem_result);
+                assert!(!is_not_stem_result, "Track {} should NOT be detected as STEM", test_track_id_not_stem);
+
+                println!("✅ STEM detection working correctly!");
+            }
+            Err(e) => {
+                println!("❌ Error loading user configuration: {:?}", e);
+            }
+        }
     }
 }

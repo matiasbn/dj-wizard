@@ -6,6 +6,7 @@ use error_stack::ResultExt;
 use crate::log::{DjWizardLog, Priority};
 use crate::queue::{QueueError, QueueResult};
 use crate::soundeo::track::SoundeoTrack;
+use crate::soundeo::SoundeoCRUD;
 use crate::user::SoundeoUser;
 
 pub struct TrackProcessor;
@@ -98,6 +99,34 @@ impl TrackProcessor {
                     track_info.print_downloading_again();
                     // Note: We don't reset already_downloaded here as it's expensive
                     // The reset will happen during actual download
+                }
+            }
+
+            // Check if track is STEM before adding to queue
+            match track_info.is_stem(soundeo_user).await {
+                Ok(true) => {
+                    println!(
+                        "Track {} ({}) is a STEM file (not supported), skipping: {}",
+                        track_info.title.red(),
+                        track_id.clone().yellow(),
+                        track_info.get_track_url().yellow()
+                    );
+                    DjWizardLog::mark_track_as_not_downloadable(track_id.clone())
+                        .change_context(QueueError)?;
+                    total_skipped += 1;
+                    continue;
+                }
+                Ok(false) => {
+                    // Track is not STEM, continue with adding to queue
+                }
+                Err(e) => {
+                    println!(
+                        "Failed to check if track {} is STEM: {:?}, skipping",
+                        track_info.title.yellow(),
+                        e
+                    );
+                    total_skipped += 1;
+                    continue;
                 }
             }
 

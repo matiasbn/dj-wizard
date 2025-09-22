@@ -13,7 +13,7 @@ use crate::queue::track_processor::TrackProcessor;
 use crate::queue::{QueueError, QueueResult};
 use crate::soundeo::track::SoundeoTrack;
 use crate::soundeo::track_list::SoundeoTracksList;
-use crate::soundeo::Soundeo;
+use crate::soundeo::{Soundeo, SoundeoCRUD};
 use crate::spotify::playlist::SpotifyPlaylist;
 use crate::url_list::UrlListCRUD;
 use crate::user::SoundeoUser;
@@ -376,14 +376,44 @@ impl QueueCommands {
                     DjWizardLog::remove_queued_track(queued_track.track_id.clone())
                         .change_context(QueueError)?;
                 }
-                _ => {
-                    println!(
-                        "{}/{}: Track {} ({}) can't be downloaded now",
-                        track_id_index + 1,
-                        queued_tracks_length,
-                        track_info.title.yellow(),
-                        track_info.get_track_url().yellow()
-                    );
+                Err(_) => {
+                    // Check if track is STEM when download URL fails
+                    match track_info.is_stem(&soundeo_user).await {
+                        Ok(true) => {
+                            // Track is STEM - print specific message, mark as not downloadable, and remove from queue
+                            println!(
+                                "{}/{}: Track {} ({}) is a STEM file (not supported), removing from queue",
+                                track_id_index + 1,
+                                queued_tracks_length,
+                                track_info.title.red(),
+                                track_info.get_track_url().yellow()
+                            );
+                            DjWizardLog::mark_track_as_not_downloadable(queued_track.track_id.clone())
+                                .change_context(QueueError)?;
+                            DjWizardLog::remove_queued_track(queued_track.track_id.clone())
+                                .change_context(QueueError)?;
+                        }
+                        Ok(false) => {
+                            // Track is not STEM - show generic error (keep in queue)
+                            println!(
+                                "{}/{}: Track {} ({}) can't be downloaded now",
+                                track_id_index + 1,
+                                queued_tracks_length,
+                                track_info.title.yellow(),
+                                track_info.get_track_url().yellow()
+                            );
+                        }
+                        Err(_) => {
+                            // Failed to check STEM status - show generic error (keep in queue)
+                            println!(
+                                "{}/{}: Track {} ({}) can't be downloaded now",
+                                track_id_index + 1,
+                                queued_tracks_length,
+                                track_info.title.yellow(),
+                                track_info.get_track_url().yellow()
+                            );
+                        }
+                    }
                 }
             }
         }
